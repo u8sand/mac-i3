@@ -7,6 +7,12 @@ public enum DefaultConfig {
     # Copy to ~/.config/mac-i3/config to customise (same syntax as i3's config).
     set $mod Mod1
 
+    # Which display a workspace lives on. `output 1` is the primary display, `output 2`, `3`... the others
+    # from left to right (see `mac-i3 outputs`). A workspace whose output is not connected lives on the
+    # primary display, and moves to its output when it is plugged in.
+    # workspace 1 output 1
+    # workspace 2 output 2
+
     # start a terminal / launcher
     bindsym $mod+Return exec open -a Terminal ~
     bindsym $mod+d exec open -a Spotlight

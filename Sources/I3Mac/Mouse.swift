@@ -121,9 +121,9 @@ extension WindowManager {
     /// Where a window dropped at `p` would go: the window under the cursor and the zone within it, or an
     /// empty output. Returns nil when nothing would change.
     private func dropTarget(dragging id: WindowID, at p: (x: Double, y: Double)) -> (rect: Rect, action: () -> Void)? {
-        if let hit = tree.windowAt(x: p.x, y: p.y, excluding: id) {
-            let zone = DropZone.at(x: p.x, y: p.y, in: hit.rect)
-            return (zone.preview(in: hit.rect), { [tree] in tree.dropWindow(id, onto: hit.id, zone: zone) })
+        if let hit = tree.dropTarget(x: p.x, y: p.y, excluding: id) {
+            let swap = config.mouseDropCenterSwaps
+            return (hit.preview, { [tree] in tree.dropWindow(id, onto: hit.id, zone: hit.zone, swapInstead: swap) })
         }
         if let out = tree.outputAt(x: p.x, y: p.y), out !== tree.find(id)?.output {
             return (out.rect, { [tree] in tree.dropWindow(id, onOutput: out.name) })

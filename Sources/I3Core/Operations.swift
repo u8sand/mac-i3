@@ -326,7 +326,7 @@ extension Tree {
     public func moveContainerToWorkspace(_ name: String, follow: Bool = false) {
         let con = focused
         guard con.isWindow || con.kind == .split, let from = con.workspace else { return }
-        let target = workspace(named: name) ?? createWorkspace(name, on: activeOutput)
+        let target = workspace(named: name) ?? createWorkspace(name, on: preferredOutput(for: name) ?? activeOutput)
         if target === from { return }
         let oldParent = con.parent!
         con.detach()

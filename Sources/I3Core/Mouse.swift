@@ -4,7 +4,7 @@ import Foundation
 public enum DropZone: String {
     case left, right, top, bottom, center
 
-    /// Outer quarter of each edge selects that side; the middle of the window means "swap".
+    /// Outer quarter of each edge selects that side; the middle of the window means "join its group".
     public static func at(x: Double, y: Double, in r: Rect) -> DropZone {
         let u = (x - r.x) / max(r.w, 1), v = (y - r.y) / max(r.h, 1)
         let nearest = [(DropZone.left, u), (.right, 1 - u), (.top, v), (.bottom, 1 - v)].min { $0.1 < $1.1 }!
@@ -115,13 +115,15 @@ extension Tree {
     // MARK: - drag to move
 
     /// Drop window `id` onto another tiled window. Dropping on an edge puts it beside the target on that
-    /// side (splitting the target's slot if the layout runs the other way); dropping in the middle swaps
-    /// the two windows.
-    public func dropWindow(_ id: WindowID, onto targetID: WindowID, zone: DropZone) {
+    /// side (splitting the target's slot if the layout runs the other way). Dropping in the middle adds it
+    /// to the target's *group*: it is inserted right after the target inside the target's own container, so
+    /// in a tabbed or stacked container it becomes a tab / row (and the active one). With `swapInstead` the
+    /// middle exchanges the two windows' places instead.
+    public func dropWindow(_ id: WindowID, onto targetID: WindowID, zone: DropZone, swapInstead: Bool = false) {
         guard id != targetID, let d = find(id), let t = find(targetID), !d.isFloating, !t.isFloating else { return }
         let before = activeWorkspace
         if zone == .center {
-            swap(d, t)
+            if swapInstead { swap(d, t) } else { relocate(d, near: t, after: true) }
         } else {
             let o: Orientation = (zone == .left || zone == .right) ? .horizontal : .vertical
             if t.parent?.layout.orientation != o { splitContainer(t, o) }
@@ -129,6 +131,30 @@ extension Tree {
         }
         noteWorkspaceChange(from: before)
         sanitizeFocus()
+    }
+
+    /// Where a window dropped at a point would go.
+    public struct DropTarget: Equatable {
+        public var id: WindowID
+        public var zone: DropZone
+        /// The area to highlight while dragging.
+        public var preview: Rect
+    }
+
+    /// The drop target under a point: a tiled window (with the zone inside it) or the title bar of a
+    /// tabbed / stacked container (which always means "join this group"). Nil over floating windows and
+    /// empty space. `excluding` is the window being dragged.
+    public func dropTarget(x: Double, y: Double, excluding: WindowID? = nil) -> DropTarget? {
+        let res = computeLayout()
+        for id in res.floating { if let f = res.frames[id], f.contains(x: x, y: y) { return nil } }
+        for bar in res.bars where bar.rect.contains(x: x, y: y) {
+            let candidates = bar.tabs.filter { $0.windowID != nil && $0.windowID != excluding }
+            guard let tab = candidates.first(where: { $0.active }) ?? candidates.first, let id = tab.windowID else { return nil }
+            return DropTarget(id: id, zone: .center, preview: bar.rect)
+        }
+        guard let hit = windowAt(x: x, y: y, excluding: excluding) else { return nil }
+        let zone = DropZone.at(x: x, y: y, in: hit.rect)
+        return DropTarget(id: hit.id, zone: zone, preview: zone.preview(in: hit.rect))
     }
 
     /// Drop window `id` on an output that has nothing under the cursor: it joins that output's visible workspace.

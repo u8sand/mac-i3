@@ -28,6 +28,18 @@ public enum ConfigParser {
         return (mods, code)
     }
 
+    /// Split on spaces, keeping "quoted phrases" together (quotes removed).
+    static func shellSplit(_ s: String) -> [String] {
+        var out: [String] = [], cur = "", quoted = false, started = false
+        for ch in s {
+            if ch == "\"" { quoted.toggle(); started = true; continue }
+            if ch == " " && !quoted { if started { out.append(cur); cur = ""; started = false }; continue }
+            cur.append(ch); started = true
+        }
+        if started { out.append(cur) }
+        return out
+    }
+
     public static func parse(_ text: String) -> Result {
         var cfg = Config()
         var errors: [String] = []
@@ -86,6 +98,17 @@ public enum ConfigParser {
                 if p.count == 2, let v = Double(p[1]) {
                     if p[0] == "inner" { cfg.innerGap = v } else if p[0] == "outer" { cfg.outerGap = v }
                 }
+            case "workspace":
+                // workspace <name> output <output> [<fallback output>...]   (names/outputs may be "quoted")
+                let t = shellSplit(rest)
+                guard let i = t.firstIndex(of: "output"), i >= 1, i + 1 < t.count else {
+                    errors.append("line \(lineNo): expected `workspace <name> output <output>...`"); continue
+                }
+                var name = Array(t[..<i])
+                if name.first == "number" { name.removeFirst() }
+                cfg.workspaceOutputs[name.joined(separator: " ")] = Array(t[(i + 1)...])
+            case "mouse_drop_center":
+                cfg.mouseDropCenterSwaps = (rest == "swap")
             case "mouse_gestures":
                 cfg.mouseGestures = !(rest == "no" || rest == "off" || rest == "false")
             case "focus_wrapping":

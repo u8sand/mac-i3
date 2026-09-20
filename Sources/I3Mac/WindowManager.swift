@@ -56,6 +56,7 @@ public final class WindowManager {
         opts = options
         tree = Tree(outputs: Displays.outputs())
         lastOutputs = describeOutputs(Displays.outputs())
+        tree.setOutputLabels(Displays.labels(), primary: Displays.primaryName())
     }
 
     func log(_ s: String) { if opts.verbose { FileHandle.standardError.write(Data(("[mac-i3] " + s + "\n").utf8)) } }
@@ -158,6 +159,7 @@ public final class WindowManager {
         tree.innerGap = config.innerGap
         tree.outerGap = config.outerGap
         tree.focusWrapping = config.focusWrapping
+        tree.setWorkspaceOutputs(config.workspaceOutputs)
         if bindingIndex[mode] == nil { mode = "default" }
     }
 
@@ -267,7 +269,9 @@ public final class WindowManager {
             "output": tree.activeOutput.name,
             "shape": tree.outputs.map { "\($0.name)/\(tree.currentWorkspace(of: $0).name): \(tree.shape(tree.currentWorkspace(of: $0)))" },
             "workspaces": tree.outputs.flatMap { $0.children.map { "\($0.name): \(tree.shape($0))" } },
-            "outputs": tree.outputs.map { ["name": $0.name, "x": $0.rect.x, "y": $0.rect.y, "w": $0.rect.w, "h": $0.rect.h] as [String: Any] },
+            "outputs": tree.outputs.map { out in ["name": out.name, "label": out.title, "number": (tree.numberedOutputs.firstIndex(where: { $0 === out }) ?? 0) + 1, "primary": out.name == tree.primaryOutputName,
+                                           "workspace": tree.currentWorkspace(of: out).name,
+                                           "x": out.rect.x, "y": out.rect.y, "w": out.rect.w, "h": out.rect.h] as [String: Any] },
             "windows": windows,
         ]
     }
@@ -365,7 +369,7 @@ public final class WindowManager {
         let desc = describeOutputs(outs)
         if desc != lastOutputs {
             lastOutputs = desc
-            tree.updateOutputs(outs)
+            tree.updateOutputs(outs, labels: Displays.labels(), primary: Displays.primaryName())
             applied.removeAll()
             changed = true
         }

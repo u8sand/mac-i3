@@ -20,7 +20,7 @@ func runDoctor() -> Never {
     check(!yabai, "yabai is not running")
     let screens = NSScreen.screens
     print("[info] \(screens.count) display(s):")
-    for o in Displays.publicOutputs() { print("       \(o)") }
+    for o in Displays.listing() { print("       output \(o.number): \(o.name) \"\(o.label)\": \(Int(o.rect.w))x\(Int(o.rect.h)) at (\(Int(o.rect.x)), \(Int(o.rect.y)))\(o.primary ? " [primary]" : "")") }
     let spans = (CFPreferencesCopyAppValue("spans-displays" as CFString, "com.apple.spaces" as CFString) as? NSNumber)?.boolValue ?? false
     if spans {
         print("[warn] 'Displays have separate Spaces' is off (System Settings > Desktop & Dock > Mission Control).")
