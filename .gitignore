@@ -2,3 +2,4 @@
 .build-pkg/
 __pycache__
 dist/
+.DS_Store
