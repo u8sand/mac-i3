@@ -79,6 +79,11 @@ extension Tree {
             case "floating", "tiling": focusModeToggle(); return nil
             case "output":
                 if args.count > 1, let d = Tree.direction(args[1]) { focusOutput(d); return nil }
+                if args.count > 1 {
+                    let spec = args.dropFirst().joined(separator: " ")
+                    if let out = resolveOutput(spec) { focusSwitchingWorkspace(descendFocused(currentWorkspace(of: out))); return nil }
+                    errors.append("no output matched: \(spec)"); return nil
+                }
             default: break
             }
         case "move":
@@ -91,8 +96,11 @@ extension Tree {
             // move [container|window] to workspace <name|next|prev|number N>
             if let i = args.firstIndex(of: "workspace"), args.contains("to") || args.first == "workspace" {
                 let rest = Array(args[(i + 1)...])
-                if rest.first == "to", rest.count >= 3, rest[1] == "output", let d = Tree.direction(rest[2]) {
-                    moveWorkspaceToOutput(d); return nil
+                if rest.first == "to", rest.count >= 3, rest[1] == "output" {
+                    let spec = rest.dropFirst(2).joined(separator: " ")
+                    if let d = Tree.direction(spec) { moveWorkspaceToOutput(d); return nil }
+                    if let out = resolveOutput(spec) { moveActiveWorkspace(to: out); return nil }
+                    errors.append("no output matched: \(spec)"); return nil
                 }
                 if let name = resolveWorkspaceName(rest) { moveContainerToWorkspace(name); return nil }
             }
@@ -202,17 +210,6 @@ extension Tree {
 
     public func moveWorkspaceToOutput(_ dir: Direction) {
         guard let out = adjacentOutput(of: activeOutput, dir) else { return }
-        let ws = activeWorkspace
-        let src = activeOutput
-        guard src.children.count > 0 else { return }
-        ws.detach()
-        // The source output must keep at least one workspace.
-        if src.children.isEmpty {
-            let fresh = createWorkspace(lowestFreeWorkspaceName(), on: src)
-            src.focusOrder = [fresh]
-        }
-        insertWorkspace(ws, into: out)
-        focus(descendFocused(ws))
-        pruneEmptyWorkspaces()
+        moveActiveWorkspace(to: out)
     }
 }

@@ -36,6 +36,7 @@ extension Tree {
         ]
         if c.kind != .window && c.kind != .root { d["layout"] = c.layout.rawValue }
         if !c.name.isEmpty { d["name"] = c.name }
+        if c.kind == .output && !c.title.isEmpty { d["label"] = c.title }
         if c.isWindow { d["id"] = c.windowID.map { Int($0) } ?? 0; d["title"] = c.title; d["floating"] = c.isFloating; d["fullscreen"] = c.fullscreen }
         if c.kind != .window { d["percent"] = c.percent }
         if !c.children.isEmpty { d["nodes"] = c.children.map { json($0) } }

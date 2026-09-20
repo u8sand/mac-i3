@@ -87,15 +87,23 @@ func violations(_ t: Tree) -> [String] {
             } else if r < 38 {
                 let a = rng.pick(t.allWindowIDs), b = rng.pick(t.allWindowIDs)
                 let zone = rng.pick([DropZone.left, .right, .top, .bottom, .center])
-                op = "drop \(a) onto \(b) \(zone)"
-                t.dropWindow(a, onto: b, zone: zone)
+                let swapIt = rng.chance(4)
+                op = "drop \(a) onto \(b) \(zone)\(swapIt ? " swap" : "")"
+                t.dropWindow(a, onto: b, zone: zone, swapInstead: swapIt)
             } else if r < 42 {
                 let id = rng.pick(t.allWindowIDs)
                 let d = { Double(Int(rng.next() % 400)) - 200 }
                 let (l, rr, tp, bt) = (d(), d(), d(), d())
                 op = "resize \(id) l\(l) r\(rr) t\(tp) b\(bt)"
                 t.resizeByEdges(id, left: l, right: rr, top: tp, bottom: bt)
-            } else if r < 44 && outputs > 1 {
+            } else if r < 46 && outputs > 1 {
+                let prefs = rng.pick([["1": ["o1"], "2": ["o0"]], ["3": ["o1", "o0"]], ["1": ["o0"]], [:], ["2": ["nonexistent"], "4": ["o1"]]])
+                op = "assign \(prefs)"
+                t.setWorkspaceOutputs(prefs)
+            } else if r < 48 && outputs > 1 {
+                op = "move workspace to output \(rng.pick(["o0", "o1"]))"
+                t.run(op)
+            } else if r < 50 && outputs > 1 {
                 let id = rng.pick(t.allWindowIDs)
                 let name = rng.pick(specs).name
                 op = "drop \(id) on output \(name)"

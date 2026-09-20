@@ -63,7 +63,9 @@ in i3. Clicking a tab in a title bar focuses that window; clicking a window focu
 * **Drag a window by its title bar** and drop it on another window; a translucent preview shows where it will go:
   * on the **outer quarter of an edge**: it goes beside that window on that side (splitting the slot if the
     layout runs the other way),
-  * in the **middle**: the two windows swap places,
+  * in the **middle**: it joins that window's **group**, inserted right after it in the same container. In a
+    tabbed or stacked container it becomes a tab / row, and dropping on the tab bar itself does the same
+    (`mouse_drop_center swap` makes the middle swap the two windows instead),
   * on **another display**: it joins the window under the cursor there, or that display's workspace if it is empty,
   * dropped on its own slot, a floating window, or nothing: it snaps back.
 * **Floating windows** are moved and resized freely and never affect the tiled layout.
@@ -77,7 +79,7 @@ edges* (System Settings → Desktop & Dock → Windows) so it does not compete w
 
 `~/.config/mac-i3/config` uses i3 syntax (`mac-i3 default-config` prints the built-in one):
 `set`, `bindsym` (incl. `--release`), `mode "name" { ... }`, `exec`, `gaps inner|outer N`,
-`focus_wrapping`, `mouse_gestures yes|no`, `for_window`, `assign` (see below).
+`focus_wrapping`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
 Keys are physical (layout independent).
 
 ### Window rules
@@ -98,6 +100,43 @@ for_window [app="^(Terminal|iTerm2)$"] floating disable
 With this, `$mod+Shift+Space` floats or tiles the focused window on demand. Note that
 `focus left/right/up/down` only navigates between *tiled* windows; floating windows are reached with the
 mouse or `$mod+Space` (`focus mode_toggle`), and `move <dir>` nudges them by 10px.
+
+### Workspaces and displays
+
+`mac-i3 outputs` numbers your displays: **output 1 is the primary display** (the one with the menu bar),
+then output 2, 3... are the others from left to right.
+
+```
+$ mac-i3 outputs
+1	display-1	Built-in Retina Display	1800x1130+0+39	primary
+2	display-2	ARZOPA	1920x1080+1800+0
+```
+
+Pin workspaces to displays in the config:
+
+```
+workspace 1 output 1
+workspace 2 output 2
+workspace 3 output 2 1      # first connected one wins
+```
+
+* A workspace whose output is **not connected** lives on the **primary** display, and moves (and shows) on
+  its own display when that is plugged in. Unplugging a display folds its workspaces into the others.
+* Assigned workspaces are created on their display, so `$mod+2` jumps to the display that owns workspace 2.
+* Assignments are re-applied on `reload` and whenever displays change.
+* A display can also be named by its id (`display-2`), its product name (`ARZOPA`, quoted if it has
+  spaces) or a part of the product name that is unique (`set $tv "LG"` then `workspace 5 output $tv`).
+
+To move a workspace by hand (does not change the assignment; the next reload puts it back):
+
+```
+move workspace to output right        # or left/up/down, a number (2), or a name
+move workspace to output 2
+focus output 1
+```
+
+Bind them if you use them a lot, e.g. `bindsym $mod+Shift+Ctrl+Right move workspace to output right`. Explicit
+commands are strict: `move workspace to output 2` with one display is an error, not a move to the primary.
 
 ### Modifier keys
 

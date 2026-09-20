@@ -90,4 +90,42 @@ import Testing
         #expect(!ConfigParser.parse("mouse_gestures off").config.mouseGestures)
         #expect(ConfigParser.parse("mouse_gestures yes").config.mouseGestures)
     }
+
+    @Test func middleDropJoinsGroupUnlessConfiguredToSwap() {
+        #expect(!ConfigParser.parse("").config.mouseDropCenterSwaps)
+        #expect(!ConfigParser.parse("mouse_drop_center group").config.mouseDropCenterSwaps)
+        #expect(ConfigParser.parse("mouse_drop_center swap").config.mouseDropCenterSwaps)
+    }
+}
+
+@Suite struct WorkspaceOutputConfig {
+    @Test func parsesAssignmentsWithVariablesAndQuotes() {
+        let r = ConfigParser.parse("""
+        set $disp1 "Built-in Retina Display"
+        set $disp2 ARZOPA
+        workspace 1 output $disp1
+        workspace 2 output $disp2
+        workspace 3 output HDMI-1 $disp2
+        workspace number 4 output primary
+        workspace "5: web" output "Built-in Retina Display"
+        """)
+        #expect(r.errors.isEmpty)
+        #expect(r.config.workspaceOutputs["1"] == ["Built-in Retina Display"])
+        #expect(r.config.workspaceOutputs["2"] == ["ARZOPA"])
+        #expect(r.config.workspaceOutputs["3"] == ["HDMI-1", "ARZOPA"])
+        #expect(r.config.workspaceOutputs["4"] == ["primary"])
+        #expect(r.config.workspaceOutputs["5: web"] == ["Built-in Retina Display"])
+    }
+
+    @Test func numberedOutputsParse() {
+        let r = ConfigParser.parse("workspace 1 output 1\nworkspace 2 output 2\nworkspace 3 output 3 1")
+        #expect(r.errors.isEmpty)
+        #expect(r.config.workspaceOutputs == ["1": ["1"], "2": ["2"], "3": ["3", "1"]])
+    }
+
+    @Test func malformedAssignmentsAreReported() {
+        #expect(ConfigParser.parse("workspace 1").errors.count == 1)
+        #expect(ConfigParser.parse("workspace output HDMI-1").errors.count == 1)
+        #expect(ConfigParser.parse("workspace 1 output").errors.count == 1)
+    }
 }

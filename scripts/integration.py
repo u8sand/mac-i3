@@ -504,10 +504,11 @@ def s_mouse_move(d):
     d.expect_frame("C", (O["x"], O["y"], O["w"] / 2, O["h"] / 2), "drop on top edge: ", tol=4)
     d.expect_frame("B", (O["x"], O["y"] + O["h"] / 2, O["w"] / 2, O["h"] / 2), tol=4)
     d.expect_frame("A", (O["x"] + O["w"] / 2, O["y"], O["w"] / 2, O["h"]), tol=4)
-    d.drag(d.titlebar("A"), d.zone("B", "center"))                   # middle of B -> swap A and B
-    d.expect_frame("A", (O["x"], O["y"] + O["h"] / 2, O["w"] / 2, O["h"] / 2), "drop in the middle swaps: ", tol=4)
-    d.expect_frame("B", (O["x"] + O["w"] / 2, O["y"], O["w"] / 2, O["h"]), tol=4)
-    d.expect_frame("C", (O["x"], O["y"], O["w"] / 2, O["h"] / 2), tol=4)
+    d.drag(d.titlebar("A"), d.zone("B", "center"))                   # middle of B -> A joins B's group: [C B A] stacked
+    h3 = O["h"] / 3
+    d.expect_frame("C", (O["x"], O["y"], O["w"], h3), "drop in the middle joins the group: ", tol=4)
+    d.expect_frame("B", (O["x"], O["y"] + h3, O["w"], h3), tol=4)
+    d.expect_frame("A", (O["x"], O["y"] + 2 * h3, O["w"], h3), tol=4)
     # dropped back inside its own slot: nothing changes, the window snaps back
     b = d.frame("B")
     d.drag(d.titlebar("B"), (d.titlebar("B")[0] + 150, d.titlebar("B")[1] + 200))
@@ -543,6 +544,72 @@ def s_mouse_multi_monitor(d):
     d.drag(d.titlebar("B"), d.zone("A", "right"))
     d.expect_frame("A", (O0["x"], O0["y"], O0["w"] / 2, O0["h"]), "B dropped back onto A's right edge: ", tol=4)
     d.expect_frame("B", (O0["x"] + O0["w"] / 2, O0["y"], O0["w"] / 2, O0["h"]), tol=4)
+
+
+def _tabbed_group_setup(d):
+    """H[A T[B C]]: A on the left, a tabbed pair (C active) on the right."""
+    d.spawn("A"); d.spawn("B")
+    d.key("Mod1+v"); d.spawn("C")
+    d.key("Mod1+w")
+    O = d.output()
+    d.expect_frame("A", (O["x"], O["y"], O["w"] / 2, O["h"]), "setup: ")
+    d.expect_frame("C", (O["x"] + O["w"] / 2, O["y"] + 22, O["w"] / 2, O["h"] - 22), "setup: ")
+    assert d.is_parked("B")
+    return O
+
+
+def _expect_joined_tabs(d, O):
+    """A is now a tab of the group that used to hold B and C: it is active and fills the output under the bar."""
+    d.expect_frame("A", (O["x"], O["y"] + 22, O["w"], O["h"] - 22), "A should be the active tab: ", tol=4)
+    assert d.is_parked("B") and d.is_parked("C"), "the other tabs should be hidden"
+    d.expect_shape("H[T[")
+    assert d.tree_focus() == "A"
+
+
+def s_mouse_drop_into_tab_bar(d):
+    """Dropping a window on a tabbed group's title bar adds it as a tab."""
+    O = _tabbed_group_setup(d)
+    d.drag(d.titlebar("A"), (O["x"] + 3 * O["w"] / 4, O["y"] + 10))
+    _expect_joined_tabs(d, O)
+
+
+def s_mouse_drop_into_tabbed_window(d):
+    """Dropping a window on the middle of a tabbed group's visible window adds it as a tab (no swap)."""
+    O = _tabbed_group_setup(d)
+    d.drag(d.titlebar("A"), d.zone("C", "center"))
+    _expect_joined_tabs(d, O)
+
+
+def s_mouse_drop_swap(d):
+    """`mouse_drop_center swap` restores the swap behaviour for a drop on the middle of a window."""
+    O = d.output()
+    d.spawn("A"); d.spawn("B")
+    d.drag(d.titlebar("A"), d.zone("B", "center"))
+    d.expect_frame("B", (O["x"], O["y"], O["w"] / 2, O["h"]), "swapped: ", tol=4)
+    d.expect_frame("A", (O["x"] + O["w"] / 2, O["y"], O["w"] / 2, O["h"]), tol=4)
+s_mouse_drop_swap.config = "mouse_drop_center swap\n"
+
+
+def s_workspace_output(d):
+    """`workspace N output M` puts workspaces on displays (1 = primary, 2 = the other one); `move workspace to output`
+    moves one by hand; a reload puts it back."""
+    outs = d.state()["outputs"]
+    if len(outs) < 2:
+        return "SKIP (single display)"
+    O0, O1 = outs[0], outs[1]                                        # sorted left to right; display 1 is the primary
+    assert outs[0]["primary"], "this scenario assumes the primary display is the left one"
+    d.spawn("A")                                                     # workspace 1 is assigned to output 2 (the right display)
+    d.expect_frame("A", (O1["x"], O1["y"], O1["w"], O1["h"]), "ws 1 should live on output 2: ", tol=4)
+    d.msg("workspace 2")                                             # workspace 2 is assigned to output 1 (the primary)
+    d.spawn("B")
+    d.expect_frame("B", (O0["x"], O0["y"], O0["w"], O0["h"]), "ws 2 should live on output 1: ", tol=4)
+    d.msg("move workspace to output 2")                              # by hand: ws 2 joins the right display, hiding ws 1
+    d.expect_frame("B", (O1["x"], O1["y"], O1["w"], O1["h"]), "after move workspace to output 2: ", tol=4)
+    assert d.is_parked("A"), "ws 1 should now be hidden behind ws 2"
+    d.msg("reload")                                                  # assignments are re-applied: ws 2 goes back
+    d.expect_frame("B", (O0["x"], O0["y"], O0["w"], O0["h"]), "reload should put ws 2 back on output 1: ", tol=4)
+    d.expect_frame("A", (O1["x"], O1["y"], O1["w"], O1["h"]), "and ws 1 shows again on output 2: ", tol=4)
+s_workspace_output.config = "workspace 1 output 2\nworkspace 2 output 1\n"
 
 
 SCENARIOS = [(n[2:], f) for n, f in sorted(globals().items()) if n.startswith("s_") and callable(f)]

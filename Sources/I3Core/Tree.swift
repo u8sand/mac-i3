@@ -21,6 +21,12 @@ public final class Tree {
     public var innerGap = 0.0
     public var outerGap = 0.0
     public private(set) var previousWorkspaceName: String?
+    /// `workspace <name> output <spec>...` from the config: where each workspace should live.
+    public internal(set) var workspaceOutputs: [String: [String]] = [:]
+    /// Name of the primary output (the one with the menu bar), for the `primary` output spec.
+    public var primaryOutputName: String?
+    /// Workspace name -> output that was showing it when that output disappeared (so it shows again on return).
+    var wasShowingOn: [String: String] = [:]
 
     public init(outputs: [(name: String, rect: Rect)] = [("main", Rect(0, 0, 1920, 1080))]) {
         let placeholder = Con(.workspace)
@@ -125,22 +131,24 @@ public final class Tree {
         out.name = name
         out.rect = rect
         root.attach(out)
-        let ws = createWorkspace(lowestFreeWorkspaceName(), on: out)
+        let ws = createWorkspace(lowestFreeWorkspaceName(for: out), on: out)
         out.focusOrder = [ws]
         return out
     }
 
     /// Reconcile with the display configuration: update rects, add new outputs, fold removed
     /// outputs' workspaces into the first remaining output.
-    public func updateOutputs(_ new: [(name: String, rect: Rect)]) {
+    public func updateOutputs(_ new: [(name: String, rect: Rect)], labels: [String: String]? = nil, primary: String? = nil) {
         guard !new.isEmpty else { return }
         for n in new {
             if let o = root.children.first(where: { $0.name == n.name }) { o.rect = n.rect } else { addOutput(name: n.name, rect: n.rect) }
         }
+        if let labels { setOutputLabels(labels, primary: primary) }
         let names = Set(new.map { $0.name })
         for out in root.children where !names.contains(out.name) {
             guard let dest = root.children.first(where: { names.contains($0.name) }) else { continue }
             let hadFocus = focused.isDescendant(of: out)
+            wasShowingOn[currentWorkspace(of: out).name] = out.name
             for ws in out.children {
                 ws.detach()
                 if ws.children.isEmpty && ws.floating.isEmpty {
@@ -156,12 +164,21 @@ public final class Tree {
             out.detach()
             if hadFocus { focus(descendFocused(currentWorkspace(of: dest))) }
         }
+        // A workspace whose assigned output just (re)appeared goes back to it.
+        enforceWorkspaceOutputs()
     }
 
-    func lowestFreeWorkspaceName() -> String {
+    /// Lowest unused workspace number, skipping numbers assigned to a different output than `out`.
+    func lowestFreeWorkspaceName(for out: Con? = nil) -> String {
         var n = 1
-        while workspace(named: String(n)) != nil { n += 1 }
-        return String(n)
+        while true {
+            let name = String(n)
+            if workspace(named: name) == nil {
+                if let out, let pref = preferredOutput(for: name), pref !== out { n += 1; continue }
+                return name
+            }
+            n += 1
+        }
     }
 
     @discardableResult
@@ -193,7 +210,7 @@ public final class Tree {
     public func switchWorkspace(_ name: String) {
         let before = activeWorkspace
         if before.name == name { return }
-        let ws = workspace(named: name) ?? createWorkspace(name, on: activeOutput)
+        let ws = workspace(named: name) ?? createWorkspace(name, on: preferredOutput(for: name) ?? activeOutput)
         focus(descendFocused(ws))
         noteWorkspaceChange(from: before)
     }

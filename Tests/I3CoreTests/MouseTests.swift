@@ -168,9 +168,43 @@ import Testing
         #expect(t.activeShape == "H[3* 1 2]")
     }
 
-    @Test func dropInTheMiddleSwaps() {
+    @Test func dropInTheMiddleJoinsTheTargetsGroup() {
         let t = makeTree([1, 2, 3])
+        t.dropWindow(1, onto: 2, zone: .center)           // inserted right after the target, in the same container
+        #expect(t.activeShape == "H[2 1* 3]")
+        #expect(t.focusedWindowID == 1)
+    }
+
+    @Test func middleDropIntoATabbedGroupAddsATab() {
+        let t = makeTree([1, 2])
+        t.run("split v"); t.addWindow(3)                  // H[1 V[2 3*]]
+        t.run("layout tabbed")                            // H[1 T[2 3*]]
+        t.dropWindow(1, onto: 2, zone: .center)
+        #expect(t.activeShape == "H[T[2 1* 3]]")
+        let r = t.computeLayout()
+        #expect(r.frames.keys.sorted() == [1])            // the joined window is the active tab
+        #expect(r.bars.first?.tabs.count == 3)
+    }
+
+    @Test func middleDropIntoAStackAddsARow() {
+        let t = makeTree([1, 2])
+        t.run("split v"); t.addWindow(3)
+        t.run("layout stacking")                          // H[1 S[2 3*]]
         t.dropWindow(1, onto: 3, zone: .center)
+        #expect(t.activeShape == "H[S[2 3 1*]]")
+        #expect(t.computeLayout().bars.first?.tabs.count == 3)
+    }
+
+    @Test func middleDropFromAnotherContainerJoinsTheGroup() {
+        let t = makeTree([1, 2, 3])
+        t.run("split v"); t.addWindow(4)                  // H[1 2 V[3 4*]]
+        t.dropWindow(1, onto: 3, zone: .center)
+        #expect(t.activeShape == "H[2 V[3 1* 4]]")
+    }
+
+    @Test func swapInsteadExchangesPlaces() {
+        let t = makeTree([1, 2, 3])
+        t.dropWindow(1, onto: 3, zone: .center, swapInstead: true)
         #expect(t.activeShape == "H[3 2 1*]")
     }
 
@@ -178,7 +212,7 @@ import Testing
         let t = makeTree([1, 2])
         _ = t.computeLayout()
         t.resizeByEdges(1, right: 100)                    // 600 | 400
-        t.dropWindow(1, onto: 2, zone: .center)
+        t.dropWindow(1, onto: 2, zone: .center, swapInstead: true)
         let f = frames(t)
         #expect(f[2]!.w == 600 && f[1]!.w == 400)
     }
@@ -237,10 +271,18 @@ import Testing
         #expect(t.computeLayout().frames[1]!.x >= 1000)
     }
 
-    @Test func swapAcrossOutputs() {
+    @Test func middleDropAcrossOutputsJoinsTheGroupThere() {
         let t = Tree(outputs: [("left", Rect(0, 0, 1000, 800)), ("right", Rect(1000, 0, 1000, 800))])
         t.addWindow(1); t.run("focus right"); t.addWindow(2)
         t.dropWindow(1, onto: 2, zone: .center)
+        #expect(t.shape(workspace: "1") == "H[]")
+        #expect(t.shape(workspace: "2") == "H[2 1*]")
+    }
+
+    @Test func swapAcrossOutputs() {
+        let t = Tree(outputs: [("left", Rect(0, 0, 1000, 800)), ("right", Rect(1000, 0, 1000, 800))])
+        t.addWindow(1); t.run("focus right"); t.addWindow(2)
+        t.dropWindow(1, onto: 2, zone: .center, swapInstead: true)
         #expect(t.shape(workspace: "1") == "H[2]")
         #expect(t.shape(workspace: "2") == "H[1*]")
     }
@@ -307,5 +349,42 @@ import Testing
     @Test func symmetricResizeKeepsBothEdges() {
         let d = EdgeDeltas(from: f, to: Rect(50, 100, 500, 300))    // both sides outward by 50
         #expect(d.left == 50 && d.right == 50)
+    }
+}
+
+
+@Suite struct DropTargets {
+    @Test func windowsGiveZones() {
+        let t = makeTree([1, 2])
+        #expect(t.dropTarget(x: 750, y: 400) == Tree.DropTarget(id: 2, zone: .center, preview: Rect(500, 0, 500, 800)))
+        #expect(t.dropTarget(x: 990, y: 400)?.zone == .right)
+        #expect(t.dropTarget(x: 10, y: 400, excluding: 1) == nil)
+    }
+
+    @Test func tabBarMeansJoinTheGroup() {
+        let t = makeTree([1, 2, 3])
+        t.run("layout tabbed")                            // bar across the top, 22px, active tab = 3
+        let hit = t.dropTarget(x: 500, y: 10, excluding: 1)
+        #expect(hit?.zone == .center && hit?.id == 3)
+        #expect(hit?.preview == Rect(0, 0, 1000, 22))
+    }
+
+    @Test func stackedRowsMeanJoinTheGroup() {
+        let t = makeTree([1, 2, 3])
+        t.run("layout stacking")
+        #expect(t.dropTarget(x: 500, y: 30, excluding: nil)?.zone == .center)
+    }
+
+    @Test func barOfOwnGroupTargetsAnotherTab() {
+        let t = makeTree([1, 2, 3])
+        t.run("layout tabbed")
+        let hit = t.dropTarget(x: 500, y: 10, excluding: 3)   // dragging the active tab over its own bar
+        #expect(hit?.id == 2 || hit?.id == 1)
+    }
+
+    @Test func floatingWindowsBlockDrops() {
+        let t = makeTree([1, 2])
+        t.addWindow(3, floating: true, rect: Rect(0, 0, 300, 300))
+        #expect(t.dropTarget(x: 100, y: 100, excluding: 2) == nil)
     }
 }

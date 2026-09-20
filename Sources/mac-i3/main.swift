@@ -13,6 +13,7 @@ USAGE
   mac-i3 tree                 JSON dump of the container tree
   mac-i3 state                JSON dump of workspaces, shapes and the OS-reported window frames
   mac-i3 shape                One-line tree shape per output
+  mac-i3 outputs              List displays with the numbers to use in `workspace N output <number>`
   mac-i3 modifiers            Show which modifier keys macOS thinks are held (should be none)
   mac-i3 release-modifiers    Clear stuck modifier keys
   mac-i3 inject <chord>       Post a synthetic key press, e.g. `mac-i3 inject Mod1+Shift+j`
@@ -83,6 +84,11 @@ case "mouse":
 case "restore":
     let n = WindowManager.restoreOffscreen(quiet: false)
     print("restored \(n) window(s)")
+case "outputs":
+    // The numbers to use in `workspace N output <number>` (a display name, or part of its product name, also works).
+    for o in Displays.listing() {
+        print("\(o.number)\t\(o.name)\t\(o.label)\t\(Int(o.rect.w))x\(Int(o.rect.h))+\(Int(o.rect.x))+\(Int(o.rect.y))\(o.primary ? "\tprimary" : "")")
+    }
 case "doctor":
     runDoctor()
 case "test-window":
