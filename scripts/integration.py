@@ -15,11 +15,14 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.environ.get("MAC_I3", os.path.join(ROOT, ".build/debug/mac-i3"))
 TOL = 3
+# A private socket: the tests must never read, replace or delete a real daemon's socket.
+os.environ["MAC_I3_SOCKET"] = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}.sock")
 
 
 def run(*args, timeout=10):
@@ -38,6 +41,7 @@ class Daemon:
             cleanup_leftovers()
         self.proc = subprocess.Popen([BIN, "run", "--only", self.only, *self.extra],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        _ours.add(self.proc.pid)
         for _ in range(50):
             if run("ping").stdout.strip() == "pong":
                 return
@@ -68,6 +72,7 @@ class Daemon:
         before = {w["title"] for w in self.state()["windows"]}
         assert title not in before, f"{title} already exists"
         self.procs[title] = subprocess.Popen([BIN, "test-window", title], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _ours.add(self.procs[title].pid)
         self.wait(lambda s: any(w["title"] == title for w in s["windows"]), f"window {title} to appear")
         self.settle()
 
@@ -134,12 +139,34 @@ class Daemon:
         assert any(sub in line for line in s["shape"]), f"expected shape containing {sub!r}, got {s['shape']}"
 
 
+def foreign_daemons():
+    """PIDs of mac-i3 window-manager daemons that are not ours (e.g. the one you use day to day)."""
+    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+    found = []
+    for line in out.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        argv = cmd.split()
+        if not argv or os.path.basename(argv[0]) != "mac-i3" or int(pid) == os.getpid():
+            continue
+        if len(argv) == 1 or argv[1] == "run" or argv[1].startswith("-"):
+            found.append(int(pid))
+    return found
+
+
+_ours = set()
+
+
 def cleanup_leftovers():
-    subprocess.run(["pkill", "-f", "mac-i3 test-window"], capture_output=True)
-    subprocess.run(["pkill", "-f", "mac-i3 run --only"], capture_output=True)
+    """Stop only the processes this script started, and only remove its own socket."""
+    for pid in list(_ours):
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+        _ours.discard(pid)
     time.sleep(0.3)
     try:
-        os.unlink(os.path.expanduser("~/.config/mac-i3/ipc.sock"))
+        os.unlink(os.environ["MAC_I3_SOCKET"])
     except FileNotFoundError:
         pass
 
@@ -370,23 +397,48 @@ def s_terminal(d):
 s_terminal.only = "Terminal"
 
 
+def s_default_floating(d):
+    """`for_window [class=".*"] floating enable` floats every window in place; a later rule can opt one back in."""
+    O = d.output()
+    d.spawn("A"); d.spawn("B")
+    for t in ("A", "B"):
+        assert d.win(t)["floating"], f"{t} should float by default"
+    fa, fb = d.frame("A"), d.frame("B")
+    for f in (fa, fb):
+        assert abs(f[2] - 420) <= 6 and abs(f[3] - 332) <= 6, f"floating window should keep its own size (420x332 incl. title bar), got {f}"
+    d.spawn("Tiled")                                               # [title="Tiled"] floating disable
+    assert not d.win("Tiled")["floating"], "later rule should have tiled this window"
+    d.expect_frame("Tiled", (O["x"], O["y"], O["w"], O["h"]), "the only tiled window fills the output: ")
+    assert d.frame("A") == fa and d.frame("B") == fb, "floating windows must not move when a tiled one arrives"
+    d.key("Mod1+Shift+space")                                      # Tiled is focused: it floats too
+    assert d.win("Tiled")["floating"]
+    d.key("Mod1+Shift+space")                                      # ...and Option+Shift+Space tiles it again
+    assert not d.win("Tiled")["floating"]
+s_default_floating.config = '''for_window [class=".*"] floating enable
+for_window [title="^Tiled$"] floating disable
+'''
+
+
 SCENARIOS = [(n[2:], f) for n, f in sorted(globals().items()) if n.startswith("s_") and callable(f)]
 
 
 def main():
+    others = foreign_daemons()
+    if others:
+        sys.exit(f"Refusing to run: another mac-i3 daemon is running (pid {', '.join(map(str, others))}). It would tile the "
+                 "test windows and fight with the test daemon.\nStop it first (Ctrl-C in its terminal), then rerun.")
     wanted = sys.argv[1:]
     failures = 0
     for name, fn in SCENARIOS:
         if wanted and not any(w in name for w in wanted):
             continue
         args = ["-v"] if os.environ.get("VERBOSE") else []
-        cfg = getattr(fn, "config", None)
-        if cfg:
-            import subprocess as sp
-            path = "/tmp/mac-i3-integration.conf"
-            with open(path, "w") as fh:
-                fh.write(sp.run([BIN, "default-config"], capture_output=True, text=True).stdout + "\n" + cfg)
-            args += ["--config", path]
+        # Always run on the built-in default config (+ the scenario's extra lines), never on the
+        # user's ~/.config/mac-i3/config, whose $mod or bindings would change what the keystrokes do.
+        path = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}.conf")
+        with open(path, "w") as fh:
+            fh.write(run("default-config").stdout + "\n" + (getattr(fn, "config", None) or ""))
+        args += ["--config", path]
         d = Daemon(args, only=getattr(fn, "only", "mac-i3"))
         t0 = time.time()
         try:

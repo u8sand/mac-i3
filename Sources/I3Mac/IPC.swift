@@ -2,7 +2,10 @@ import Foundation
 
 /// Line-based request/response protocol over a Unix domain socket.
 public enum IPC {
+    /// `MAC_I3_SOCKET` overrides the location (the integration tests use it so they can never touch a
+    /// real daemon's socket).
     public static var socketPath: String {
+        if let custom = ProcessInfo.processInfo.environment["MAC_I3_SOCKET"], !custom.isEmpty { return custom }
         let dir = NSString(string: "~/.config/mac-i3").expandingTildeInPath
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         return dir + "/ipc.sock"

@@ -43,3 +43,42 @@ import Testing
         #expect(r.errors.count == 2)
     }
 }
+
+@Suite struct CriteriaTests {
+    @Test func classWildcardMatchesEverything() {
+        let c = Criteria(#"[class=".*"]"#)
+        #expect(c.matches(app: "Terminal", title: "x") && c.matches(app: "", title: ""))
+    }
+
+    @Test func emptyCriteriaMatchesEverything() {
+        #expect(Criteria("[]").matches(app: "Any", title: "thing"))
+    }
+
+    @Test func appMatchesAnywhereCaseInsensitively() {
+        let c = Criteria(#"[app="term"]"#)
+        #expect(c.matches(app: "Terminal", title: "") && !c.matches(app: "Safari", title: ""))
+    }
+
+    @Test func alternationAndAnchors() {
+        let c = Criteria(#"[app="^(Terminal|iTerm2)$"]"#)
+        #expect(c.matches(app: "iTerm2", title: "") && c.matches(app: "Terminal", title: ""))
+        #expect(!c.matches(app: "Terminal Helper", title: ""))
+    }
+
+    @Test func allTermsMustMatch() {
+        let c = Criteria(#"[app="Terminal" title="^vim"]"#)
+        #expect(c.matches(app: "Terminal", title: "vim foo"))
+        #expect(!c.matches(app: "Terminal", title: "zsh"))
+        #expect(!c.matches(app: "Safari", title: "vim foo"))
+    }
+
+    @Test func titleValuesMayContainSpaces() {
+        let c = Criteria(#"[title="Save As"]"#)
+        #expect(c.matches(app: "x", title: "Save As…") && !c.matches(app: "x", title: "Save"))
+    }
+
+    @Test func unknownKeysNeverMatchAndBadRegexFallsBackToSubstring() {
+        #expect(!Criteria(#"[window_role="x"]"#).matches(app: "a", title: "b"))
+        #expect(Criteria(#"[title="foo("]"#).matches(app: "a", title: "a foo( b"))
+    }
+}
