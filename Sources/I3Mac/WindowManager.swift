@@ -41,6 +41,8 @@ public final class WindowManager {
     var reclaimFocus = false
     var lastOutputs: [String] = []
     var mouseMonitor: Any?
+    /// Set when a command (closing a window) will move focus a moment later: the cursor should follow then.
+    var warpUntil = Date.distantPast
     /// Consecutive passes in which a known window was not listed (see `reconcile`).
     var missing: [WindowID: Int] = [:]
     var gesture: Gesture?
@@ -178,17 +180,20 @@ public final class WindowManager {
     @discardableResult
     func execute(_ line: String) -> String {
         var errs: [String] = []
+        let before = focusSnapshot()
         let actions = tree.run(line, errors: &errs)
         for a in actions { perform(a) }
-        // Commands may act on windows that vanished; reconcile first so the tree is truthful.
-        applyLayout()
+        let res = applyLayout()
+        warpAfterCommand(before: before, layout: res)
         return errs.isEmpty ? "ok" : "error: " + errs.joined(separator: "; ")
     }
 
     func perform(_ a: Action) {
         switch a {
         case .exec(let cmd): execShell(cmd)
-        case .kill(let id): closeWindow(id)
+        case .kill(let id):
+            closeWindow(id)
+            warpUntil = Date().addingTimeInterval(1.5)   // focus moves to a neighbour once the window is gone
         case .mode(let m):
             if bindingIndex[m] != nil { mode = m } else { log("unknown mode \(m)") }
         case .reload:
@@ -475,7 +480,8 @@ public final class WindowManager {
         return (s.maxX - 1, s.maxY - 1)
     }
 
-    public func applyLayout() {
+    @discardableResult
+    public func applyLayout() -> LayoutResult {
         let res = tree.computeLayout()
         let pp = parkPoint
         for id in res.hidden {
@@ -495,12 +501,14 @@ public final class WindowManager {
         }
         overlay?.update(bars: res.bars, tree: tree)
         pushFocus(res)
+        return res
     }
 
     func pushFocus(_ res: LayoutResult) {
         let target = res.focusedWindow
         defer { lastAppliedFocus = target }
         guard let id = target, id != lastAppliedFocus, let w = wins[id] else { return }
+        warpAfterDeferredFocusChange(to: id, layout: res)
         focusPushedAt = Date()
         let app = AXUIElementCreateApplication(w.pid)
         AX.set(app, kAXFrontmostAttribute, kCFBooleanTrue)

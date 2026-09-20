@@ -612,6 +612,93 @@ def s_workspace_output(d):
 s_workspace_output.config = "workspace 1 output 2\nworkspace 2 output 1\n"
 
 
+def _cursor():
+    x, y = run("mouse", "pos").stdout.split()
+    return (int(x), int(y))
+
+
+def _place_cursor(x, y):
+    run("mouse", "move", str(x), str(y))
+    time.sleep(0.25)
+
+
+def _expect_cursor(want, msg="", tol=4):
+    got = _cursor()
+    assert abs(got[0] - want[0]) <= tol and abs(got[1] - want[1]) <= tol, f"{msg}expected cursor near {tuple(round(v) for v in want)}, got {got}"
+
+
+def _centre(d, title):
+    f = d.frame(title)
+    return (f[0] + f[2] / 2, f[1] + f[3] / 2)
+
+
+def s_mouse_warp_center(d):
+    """mouse_warping center: keyboard focus changes put the cursor in the middle of the focused window."""
+    O = d.output()
+    d.spawn("A"); d.spawn("B")
+    _place_cursor(O["x"] + O["w"] * 0.9, O["y"] + O["h"] * 0.9)                # inside B, off-centre
+    d.key("Mod1+j")                                                            # focus A
+    _expect_cursor(_centre(d, "A"), "after focus left: ")
+    d.key("Mod1+semicolon")                                                    # focus B
+    _expect_cursor(_centre(d, "B"), "after focus right: ")
+    # a click is not a keyboard focus move: the cursor stays exactly where you clicked
+    a = d.frame("A")
+    spot = (a[0] + 100, a[1] + 300)
+    d.click(spot, settle=1.0)
+    _expect_cursor(spot, "a click must not warp the cursor: ", tol=3)
+    # closing the focused window moves focus to a neighbour later: the cursor follows then
+    d.key("Mod1+semicolon")                                                    # focus B (cursor -> B centre)
+    _place_cursor(a[0] + 100, a[1] + 300)                                      # park the cursor over A
+    d.key("Mod1+Shift+q", settle=False)
+    d.wait(lambda s: all(w["title"] != "B" for w in s["windows"]), "B to close")
+    d.settle(0.8)
+    _expect_cursor(_centre(d, "A"), "after the focused window closed: ")
+
+
+def s_mouse_warp_window(d):
+    """mouse_warping window (the default): only jump when the cursor is not already over the focused window."""
+    O = d.output()
+    d.spawn("A"); d.spawn("B")
+    d.key("Mod1+w")                                                            # tabbed: A and B share one frame
+    spot = (O["x"] + 100, O["y"] + 300)
+    _place_cursor(*spot)
+    d.key("Mod1+j")                                                            # focus A (other tab, same frame)
+    _expect_cursor(spot, "cursor already over the focused window must stay put: ", tol=3)
+    d.key("Mod1+e")                                                            # back to a split: A | B
+    _place_cursor(*spot)                                                       # over A (left half)
+    d.key("Mod1+semicolon")                                                    # focus B: cursor is outside it
+    _expect_cursor(_centre(d, "B"), "cursor outside the newly focused window: ")
+s_mouse_warp_window.config = "mouse_warping window\n"
+
+
+def s_mouse_warp_none(d):
+    """mouse_warping none: the cursor is never moved."""
+    O = d.output()
+    d.spawn("A"); d.spawn("B")
+    spot = (O["x"] + O["w"] * 0.9, O["y"] + O["h"] * 0.9)
+    _place_cursor(*spot)
+    d.key("Mod1+j"); d.key("Mod1+semicolon"); d.key("Mod1+j")
+    _expect_cursor(spot, "mouse_warping none must not move the cursor: ", tol=3)
+
+
+def s_mouse_warp_output(d):
+    """mouse_warping output (i3's default): only a change of display moves the cursor."""
+    outs = d.state()["outputs"]
+    if len(outs) < 2:
+        return "SKIP (single display)"
+    O0, O1 = outs[0], outs[1]
+    d.spawn("A"); d.spawn("B")
+    spot = (O0["x"] + O0["w"] * 0.9, O0["y"] + O0["h"] * 0.9)
+    _place_cursor(*spot)
+    d.key("Mod1+j")                                                            # same display: no warp
+    _expect_cursor(spot, "focus within a display must not warp: ", tol=3)
+    d.key("Mod1+Shift+semicolon")                                              # A moves to display 2 with focus
+    _expect_cursor(_centre(d, "A"), "focus changed display: ")
+    assert _cursor()[0] >= O1["x"], "the cursor should now be on the second display"
+s_mouse_warp_output.config = "mouse_warping output\n"
+s_mouse_warp_center.config = "mouse_warping center\n"
+
+
 SCENARIOS = [(n[2:], f) for n, f in sorted(globals().items()) if n.startswith("s_") and callable(f)]
 
 
@@ -630,7 +717,7 @@ def main():
         # user's ~/.config/mac-i3/config, whose $mod or bindings would change what the keystrokes do.
         path = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}.conf")
         with open(path, "w") as fh:
-            fh.write(run("default-config").stdout + "\n" + (getattr(fn, "config", None) or ""))
+            fh.write(run("default-config").stdout + "\nmouse_warping none\n" + (getattr(fn, "config", None) or ""))
         args += ["--config", path]
         d = Daemon(args, only=getattr(fn, "only", "mac-i3"))
         t0 = time.time()

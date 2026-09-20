@@ -7,6 +7,10 @@ public enum DefaultConfig {
     # Copy to ~/.config/mac-i3/config to customise (same syntax as i3's config).
     set $mod Mod1
 
+    # Mouse cursor follows keyboard focus: window (default: jump to the focused window's centre unless the
+    # cursor is already over it), center (always), output (only when focus changes display), none.
+    # mouse_warping window
+
     # Which display a workspace lives on. `output 1` is the primary display, `output 2`, `3`... the others
     # from left to right (see `mac-i3 outputs`). A workspace whose output is not connected lives on the
     # primary display, and moves to its output when it is plugged in.

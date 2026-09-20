@@ -129,3 +129,12 @@ import Testing
         #expect(ConfigParser.parse("workspace 1 output").errors.count == 1)
     }
 }
+
+
+@Suite struct MouseWarpingOption {
+    @Test func parsesModesAndDefaultsToWindow() {
+        #expect(ConfigParser.parse("").config.mouseWarping == "window")
+        for m in ["none", "output", "window", "center"] { #expect(ConfigParser.parse("mouse_warping \(m)").config.mouseWarping == m) }
+        #expect(ConfigParser.parse("mouse_warping sideways").errors.count == 1)
+    }
+}
