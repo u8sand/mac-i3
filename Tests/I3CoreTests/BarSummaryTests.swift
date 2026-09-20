@@ -74,3 +74,75 @@ import Testing
         #expect(t.barSummary() != before)                      // a window came: the bar must redraw
     }
 }
+
+
+@Suite struct WorkspaceBarNotation {
+    func notation(_ t: Tree, ws: String = "1") -> String {
+        let w = t.barSummary().outputs.flatMap { $0.workspaces }.first { $0.name == ws }!
+        return w.notation { id in ["1": "chrome", "2": "term", "3": "chrome", "4": "chrome", "5": "chrome", "6": "mail"][String(id)] ?? "w\(id)" }
+    }
+
+    @Test func plainHorizontalWorkspaceHasNoWrapper() {
+        #expect(notation(makeTree([1, 2])) == "chrome term")
+    }
+
+    /// The string from the feature request, built with real tree commands.
+    @Test func theExampleFromTheRequest() {
+        let t = makeTree([1, 2])                               // H[1 2]
+        t.run("focus parent"); t.run("split h")                // H[H[1 2]]: the pair becomes a container
+        t.addWindow(3)                                         // H[H[1 2] 3]
+        t.run("split h"); t.run("layout tabbed")               // H[H[1 2] T[3]]
+        t.addWindow(4)                                         // ... T[3 4]
+        t.run("split v"); t.addWindow(5)                       // ... T[3 V[4 5]]
+        #expect(t.activeShape == "H[H[1 2] T[3 V[4 5*]]]")
+        #expect(notation(t) == "h[chrome term] t[chrome v[chrome chrome]]")
+    }
+
+    @Test func nestedContainersUseTheirLayoutLetters() {
+        let t = makeTree([1, 2])                               // H[1 2*]
+        t.run("split v"); t.addWindow(3)                       // H[1 V[2 3*]]
+        t.run("layout tabbed")                                 // H[1 T[2 3*]]
+        #expect(notation(t) == "chrome t[term chrome]")
+        t.run("split v"); t.addWindow(4)                       // a vertical container inside the tabs
+        #expect(notation(t) == "chrome t[term v[chrome chrome]]")
+    }
+
+    @Test func nonDefaultWorkspaceLayoutIsShownAsAContainer() {
+        let t = makeTree([1, 2, 3])
+        t.run("focus parent"); t.run("layout tabbed")          // the workspace itself becomes tabbed
+        #expect(notation(t) == "t[chrome term chrome]")
+        t.run("layout stacking")
+        #expect(notation(t).hasPrefix("s["))
+    }
+
+    @Test func floatingWindowsFormTheirOwnGroup() {
+        let t = makeTree([1])
+        t.addWindow(2, floating: true)
+        #expect(notation(t) == "chrome f[term]")
+    }
+
+    @Test func focusedWindowIsMarked() {
+        let t = makeTree([1, 2])
+        let w = t.barSummary().outputs[0].workspaces[0]
+        #expect(w.nodes == [.window(1, focused: false), .window(2, focused: true)])
+        t.run("focus left")
+        #expect(t.barSummary().outputs[0].workspaces[0].nodes == [.window(1, focused: true), .window(2, focused: false)])
+    }
+
+    @Test func focusOnAContainerMarksNoWindow() {
+        let t = makeTree([1, 2])
+        t.run("split v"); t.addWindow(3)
+        t.run("focus parent")
+        let all = t.barSummary().outputs[0].workspaces[0].nodes
+        func focusedCount(_ n: BarNode) -> Int {
+            switch n { case .window(_, let f): return f ? 1 : 0; case .container(_, let k): return k.reduce(0) { $0 + focusedCount($1) } }
+        }
+        #expect(all.reduce(0) { $0 + focusedCount($1) } == 0)
+    }
+
+    @Test func windowCounts() {
+        let t = makeTree([1, 2])
+        t.run("split v"); t.addWindow(3)
+        #expect(t.barSummary().outputs[0].workspaces[0].nodes.reduce(0) { $0 + $1.windowCount } == 3)
+    }
+}

@@ -751,6 +751,30 @@ def s_workspace_bar_off(d):
     assert _bar()["enabled"] is False
 
 
+def s_workspace_bar_layout(d):
+    """The bar reports each workspace's containers in i3 notation: a layout letter then [children], windows by app name."""
+    d.spawn("A"); d.spawn("B")
+    ws = lambda: _bar_workspaces(_bar())["1"]
+    assert ws()["notation"] == "mac-i3 mac-i3", ws()["notation"]              # plain horizontal: implicit
+    d.key("Mod1+v"); d.spawn("C")                                                # A | (B / C)
+    assert ws()["notation"] == "mac-i3 v[mac-i3 mac-i3]", ws()["notation"]
+    d.key("Mod1+w")                                                              # the vertical pair becomes tabbed
+    assert ws()["notation"] == "mac-i3 t[mac-i3 mac-i3]", ws()["notation"]
+    d.key("Mod1+s")                                                              # `layout` acts on the focused window's parent: stack the pair
+    assert ws()["notation"] == "mac-i3 s[mac-i3 mac-i3]", ws()["notation"]
+    d.key("Mod1+Shift+space")                                                    # ... and float the focused window
+    assert ws()["notation"].endswith("f[mac-i3]"), ws()["notation"]
+    assert "tree" in _bar()["detail"], _bar()["detail"]
+s_workspace_bar_layout.config = "workspace_bar yes\n"
+
+
+def s_workspace_bar_flat(d):
+    """workspace_bar_layout flat: only app icons, no tree."""
+    d.spawn("A"); d.spawn("B")
+    assert "icons(" in _bar()["detail"] and "tree" not in _bar()["detail"], _bar()["detail"]
+s_workspace_bar_flat.config = "workspace_bar yes\nworkspace_bar_layout flat\n"
+
+
 SCENARIOS = [(n[2:], f) for n, f in sorted(globals().items()) if n.startswith("s_") and callable(f)]
 
 
