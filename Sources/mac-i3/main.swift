@@ -23,7 +23,7 @@ USAGE
   mac-i3 restore              Pull windows stranded off-screen back onto the display
   mac-i3 doctor               Check permissions and environment
   mac-i3 test-window <title>  Open a labelled test window (for trying it out)
-  mac-i3 default-config       Print the built-in i3-style default config
+  mac-i3 default-config [stock]  Print the built-in default config (or i3's own stock key bindings)
 """
 
 var args = Array(CommandLine.arguments.dropFirst())
@@ -99,7 +99,7 @@ case "doctor":
 case "test-window":
     runTestWindow(title: args.first ?? "test")
 case "default-config":
-    print(DefaultConfig.text)
+    print(args.first == "stock" ? DefaultConfig.stock : DefaultConfig.text)
 case "help", "-h", "--help":
     print(usage)
 default:
