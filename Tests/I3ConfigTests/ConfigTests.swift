@@ -5,12 +5,53 @@ import Testing
     @Test func defaultConfigParsesCleanly() {
         let r = ConfigParser.parse(DefaultConfig.text)
         #expect(r.errors.isEmpty)
+        #expect(r.config.modes["default"]!.count == 42)
+        #expect(r.config.modes["resize"] == nil)                     // resize mode is offered commented out
+        #expect(r.config.innerGap == 10 && r.config.outerGap == 2)
+        #expect(r.config.workspaceOutputs.count == 10)
+    }
+
+    @Test func stockConfigParsesCleanly() {
+        let r = ConfigParser.parse(DefaultConfig.stock)
+        #expect(r.errors.isEmpty)
         #expect(r.config.modes["default"]!.count > 50)
         #expect(r.config.modes["resize"]!.count == 11)
     }
 
+    @Test func defaultBindingsMatchTheDocumentedOnes() throws {
+        let b = ConfigParser.parse(DefaultConfig.text).config.modes["default"]!
+        func bound(_ cmd: String) -> KeyBinding? { b.first { $0.command == cmd } }
+        #expect(try #require(bound("kill")).modifiers == [.option] && bound("kill")?.keyCode == 12)            // Option+Q
+        #expect(try #require(bound("reload")).modifiers == [.option, .control])                                  // Control+Option+C
+        #expect(try #require(bound("fullscreen toggle")).keyCode == 36)                                          // Enter
+        #expect(try #require(bound("layout tabbed")).keyCode == 48)                                              // Tab
+        #expect(try #require(bound("exec open -na \"Google Chrome\"")).keyCode == 13)                            // Option+W
+        #expect(try #require(bound("move container to workspace number 10")).modifiers == [.option, .shift])
+    }
+
+    @Test func defaultBindingsDoNotCollide() {
+        let b = ConfigParser.parse(DefaultConfig.text).config.modes["default"]!
+        #expect(Set(b.map { $0.lookupKey }).count == b.count)
+    }
+
+    @Test func commentedOptionsAreValidWhenUncommented() {
+        // Every "# option value" line in the options/optional sections must be a real, parseable setting.
+        let lines = DefaultConfig.text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let tail = lines.drop { !$0.contains("---- Not bound by default") }
+        let uncommented = tail.compactMap { l -> String? in
+            guard l.hasPrefix("# "), !l.hasPrefix("# The ") , !l.hasPrefix("# A ") else { return nil }
+            let body = String(l.dropFirst(2))
+            let words = ["bindsym", "mode", "mouse_", "workspace_bar", "focus_wrapping", "}"]
+            return words.contains(where: { body.hasPrefix($0) }) || body.hasPrefix("    ") ? body : nil
+        }
+        let r = ConfigParser.parse("set $super Option\n" + uncommented.joined(separator: "\n"))
+        #expect(r.errors.isEmpty)
+        #expect(r.config.modes["resize"]?.count == 6)
+        #expect(r.config.modes["default"]!.contains { $0.command == "mode \"resize\"" })
+    }
+
     @Test func modAndKeyResolution() throws {
-        let r = ConfigParser.parse(DefaultConfig.text)
+        let r = ConfigParser.parse(DefaultConfig.stock)
         let b = try #require(r.config.modes["default"]!.first { $0.command == "kill" })
         #expect(b.modifiers == [.option, .shift])
         #expect(b.keyCode == 12)   // q

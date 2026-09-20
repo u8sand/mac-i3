@@ -1,7 +1,7 @@
 # mac-i3
 
-i3 window management for macOS, as a single CLI. Run `mac-i3`, and it listens for i3's default key
-bindings (with **Option** as `$mod`) and tiles, focuses and moves your windows the way i3 does.
+i3 window management for macOS, as a single CLI. Run `mac-i3`, and it listens for key bindings (Option-based
+by default) and tiles, focuses and moves your windows the way i3 does.
 
 It implements i3's real container tree (arbitrary nesting, per-container layouts, `focus parent`,
 focus stacks, `split`, tabbed/stacked with title bars, floating, fullscreen, workspaces, multiple
@@ -25,32 +25,37 @@ managers will fight.
 else on your desktop is left alone.
 
 ```sh
-mac-i3 --only Terminal -v       # then press Option+Return a few times
+mac-i3 --only Terminal -v       # then press Option+T a few times
 mac-i3 test-window A            # a labelled window that is handy for experiments
 ```
 
 If a run ever ends badly (e.g. `kill -9`), `mac-i3 restore` pulls parked windows back on-screen; a new
 daemon also does this on start.
 
-## Key bindings (i3 defaults, `$mod` = Option)
+## Key bindings
 
-(`$mod` is configurable, e.g. Control+Option; see [Modifier keys](#modifier-keys).)
+The built-in default (used when there is no `~/.config/mac-i3/config`; print it with `mac-i3 default-config`):
 
 | Keys | Action |
 |---|---|
-| `$mod+Return` | new Terminal window (`open -a Terminal ~`) |
-| `$mod+d` | launcher (opens Spotlight; configurable) |
-| `$mod+Shift+q` | close focused window |
-| `$mod+j` `k` `l` `;` (or arrows) | focus left / down / up / right |
-| `$mod+Shift+j` `k` `l` `;` (or arrows) | move window left / down / up / right |
-| `$mod+h` / `$mod+v` | split horizontal / vertical |
-| `$mod+s` / `$mod+w` / `$mod+e` | stacking / tabbed / toggle split |
-| `$mod+f` | fullscreen |
-| `$mod+Shift+Space` / `$mod+Space` | toggle floating / switch tiling↔floating focus |
-| `$mod+a` | focus parent container |
-| `$mod+1..0` / `$mod+Shift+1..0` | switch workspace / move window to workspace |
-| `$mod+r` | resize mode: `j k l ;` or arrows resize, `Return`/`Esc` leave |
-| `$mod+Shift+c` / `r` / `e` | reload config / restart / exit |
+| `Option+T` / `C` / `W` | new Terminal / VS Code / Chrome window |
+| `Option+Q` | close the focused window |
+| `Option+Z` | toggle floating |
+| `Option+←↓↑→` | focus left / down / up / right |
+| `Option+Shift+←↓↑→` | move the window left / down / up / right |
+| `Option+1..0` | switch to workspace 1..10 |
+| `Option+Shift+1..0` | move the window to workspace 1..10 |
+| `Control+Option+Enter` | fullscreen |
+| `Control+Option+↓` / `→` | split vertically / horizontally (where the *next* window opens) |
+| `Control+Option+Tab` | tabbed layout |
+| `Control+Option+↑` / `←` | toggle split direction |
+| `Control+Option+C` / `R` / `E` | reload config / restart / exit |
+
+Workspaces alternate between the first two displays (odd on the primary, even on the next), and there is a
+10px gap between windows. Everything is remappable, and the default file lists more bindings you can switch on
+(home-row focus `j k l ;`, stacked layout, `focus parent`, keyboard resize mode, moving a workspace to another
+display). `mac-i3 default-config stock` prints i3's own stock bindings (`$mod+j/k/l/;`, `$mod+r` resize mode,
+`$mod+d`...) if you would rather start from those.
 
 Windows open next to the focused one; `split` decides the direction of the *next* window, exactly as
 in i3. Clicking a tab in a title bar focuses that window; clicking a window focuses it in the tree.
@@ -63,7 +68,7 @@ in i3. Clicking a tab in a title bar focuses that window; clicking a window focu
   behaviour: `window` (default), `center` (always to the exact centre), `output` (only when focus changes display,
   i3's own behaviour) or `none`.
 
-* **Click** a window: it becomes the focused window, so `$mod+j/k/l/;` continue from it.
+* **Click** a window: it becomes the focused window, so the focus keys continue from it.
 * **Drag a window edge or corner** (tiled windows): the boundary moves and the neighbours reflow. An edge on
   the outer border of the screen cannot move; the window snaps back.
 * **Drag a window by its title bar** and drop it on another window; a translucent preview shows where it will go:
@@ -103,9 +108,10 @@ for_window [class=".*"] floating enable
 for_window [app="^(Terminal|iTerm2)$"] floating disable
 ```
 
-With this, `$mod+Shift+Space` floats or tiles the focused window on demand. Note that
+With this, `Option+Z` floats or tiles the focused window on demand. Note that
 `focus left/right/up/down` only navigates between *tiled* windows; floating windows are reached with the
-mouse or `$mod+Space` (`focus mode_toggle`), and `move <dir>` nudges them by 10px.
+mouse or `focus mode_toggle` (not bound by default; the default config has it ready to uncomment), and
+`move <dir>` nudges them by 10px.
 
 ### Workspace bar
 
@@ -158,7 +164,7 @@ workspace 3 output 2 1      # first connected one wins
 
 * A workspace whose output is **not connected** lives on the **primary** display, and moves (and shows) on
   its own display when that is plugged in. Unplugging a display folds its workspaces into the others.
-* Assigned workspaces are created on their display, so `$mod+2` jumps to the display that owns workspace 2.
+* Assigned workspaces are created on their display, so `Option+2` jumps to the display that owns workspace 2.
 * Assignments are re-applied on `reload` and whenever displays change.
 * A display can also be named by its id (`display-2`), its product name (`ARZOPA`, quoted if it has
   spaces) or a part of the product name that is unique (`set $tv "LG"` then `workspace 5 output $tv`).
@@ -171,7 +177,7 @@ move workspace to output 2
 focus output 1
 ```
 
-Bind them if you use them a lot, e.g. `bindsym $mod+Shift+Ctrl+Right move workspace to output right`. Explicit
+Bind them if you use them a lot, e.g. `bindsym Control+$super+o move workspace to output right`. Explicit
 commands are strict: `move workspace to output 2` with one display is an error, not a move to the primary.
 
 ### Modifier keys
@@ -192,17 +198,17 @@ case-insensitive):
 Using `Mod2`, `Mod3` or `Mod5` is reported as a config error. Use `Control` where you might have
 reached for `Mod3`.
 
-`$mod` is plain text substitution, so it can stand for several modifiers at once. To use
-**Control+Option** as the mod key, change one line at the top of your config:
+`$super` in the default config is plain text substitution (`set $super Option`), so it can stand for several
+modifiers at once. To use **Command** instead, or **Control+Option** for everything, change that one line:
 
 ```
-set $mod Mod1+Control
+set $super Mod4
+set $super Mod1+Control
 ```
 
-Every `$mod+…` binding then becomes `Ctrl+Option+…` (and `$mod+Shift+q` becomes
-`Ctrl+Option+Shift+q`). Chords that are not bound are passed through to the focused app untouched, so with
-Ctrl+Option as `$mod`, a plain Option+d or Option+f still works in your shell. Reload with
-`$mod+Shift+c`, or restart the daemon.
+Chords that are not bound are passed through to the focused app untouched, so a plain Option+D or Option+F
+still works in your shell when the layout bindings use Control+Option. Reload with `Control+Option+C`, or
+restart the daemon.
 
 ## Talking to a running daemon
 
@@ -242,7 +248,8 @@ FUZZ_SEEDS=6000 scripts/test.sh         # longer soak
 scripts/integration.py [name...]        # end-to-end scenarios (mouse ones: `scripts/integration.py mouse`)
 ```
 
-The integration suite starts a scoped daemon, opens labelled windows, **injects real key presses**, and
+The integration suite runs on i3's stock preset (`mac-i3 default-config stock`), so it does not depend on your
+config or on the built-in default. It starts a scoped daemon, opens labelled windows, **injects real key presses**, and
 asserts on the frames and focus that macOS reports through the Accessibility API (tiling, splits,
 focus/move, workspaces, tabbed/stacked, kill, resize mode, floating, fullscreen, multi-monitor, rules, mouse
 click/resize/drag-to-move (incl. across displays),

@@ -769,7 +769,7 @@ def main():
         # user's ~/.config/mac-i3/config, whose $mod or bindings would change what the keystrokes do.
         path = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}.conf")
         with open(path, "w") as fh:
-            fh.write(run("default-config").stdout + "\nmouse_warping none\nworkspace_bar no\n" + (getattr(fn, "config", None) or ""))
+            fh.write(run("default-config", "stock").stdout + "\nmouse_warping none\nworkspace_bar no\n" + (getattr(fn, "config", None) or ""))
         args += ["--config", path]
         d = Daemon(args, only=getattr(fn, "only", "mac-i3"))
         t0 = time.time()
