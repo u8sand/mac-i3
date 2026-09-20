@@ -90,7 +90,7 @@ edges* (System Settings → Desktop & Dock → Windows) so it does not compete w
 
 `~/.config/mac-i3/config` uses i3 syntax (`mac-i3 default-config` prints the built-in one):
 `set`, `bindsym` (incl. `--release`), `mode "name" { ... }`, `exec`, `gaps inner|outer N`,
-`focus_wrapping`, `workspace_bar yes|no`, `workspace_bar_icons all|active|none`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
+`focus_wrapping`, `workspace_bar yes|no`, `workspace_bar_icons all|active|none`, `workspace_bar_layout tree|flat`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
 Keys are physical (layout independent).
 
 ### Window rules
@@ -124,9 +124,15 @@ A menu bar item lists your workspaces, so you can always see where you are:
 * Workspaces are grouped **by display** (in `output N` order, primary first, separated by a divider).
 * The workspace **showing** on each display has a soft highlight; the one with **keyboard focus** is filled
   with the accent colour.
-* Each workspace shows an **icon per app** (up to 3, then `+N`). When the item would get too wide for the
-  menu bar it drops the icons from inactive workspaces, then shrinks the count, and finally shows numbers only,
-  so it never crowds out your other menu bar items.
+* Each workspace shows its **window layout in i3 style**: a container is its layout letter (`h` horizontal,
+  `v` vertical, `t` tabbed, `s` stacked) followed by its children in square brackets, and each window is its
+  app icon. Chrome and a terminal side by side, next to a tabbed pair whose second tab is split vertically, reads
+  `h[chrome term] t[chrome v[chrome chrome]]` (drawn with the real app icons in place of the names). The
+  workspace's own container is left implicit while it is plain horizontal, and shows as `t[…]`, `v[…]` or `s[…]`
+  otherwise; floating windows form an `f[…]` group, and the window with keyboard focus is underlined.
+* When the item would get too wide for the menu bar it degrades step by step: the tree stays only on the showing
+  workspaces, then those fall back to one icon per app, and finally to numbers only, so it never crowds out your
+  other menu bar items. (`workspace_bar_layout flat` skips the tree and shows just app icons.)
 * Only workspaces that exist are listed (they have windows or are showing), sorted numerically.
 * The current binding mode (e.g. `resize`) appears as an orange tag while it is active.
 * **Click** a workspace to switch to it. **Right-click** (or ctrl-click) for a menu of every window, grouped by
@@ -134,10 +140,11 @@ A menu bar item lists your workspaces, so you can always see where you are:
 
 ```
 workspace_bar yes|no                 # default yes
-workspace_bar_icons all|active|none  # default all: icons everywhere (dropped when crowded); active: only on showing workspaces
+workspace_bar_icons all|active|none  # default all: detail everywhere (dropped when crowded); active: only on showing workspaces
+workspace_bar_layout tree|flat       # default tree: h[icon icon] structure; flat: just the app icons
 ```
 
-`mac-i3 bar` prints what the bar shows and where it is on screen, and `mac-i3 doctor` warns if macOS is hiding
+`mac-i3 bar-preview out.png [dark] [flat] [crowded]` renders a sample bar offscreen (no daemon needed), and `mac-i3 bar` prints what the bar shows (including each workspace's layout as text, with app names) and where it is on screen, and `mac-i3 doctor` warns if macOS is hiding
 it. **macOS only draws the menu bar on the primary display** while displays share a Space (the default), so the
 bar lists all displays' workspaces in one place. On a Mac with a notch a crowded menu bar can hide the item
 behind the notch: Cmd-drag other items out of the way, or use `workspace_bar_icons none`. You can also Cmd-drag

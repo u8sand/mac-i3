@@ -5,6 +5,28 @@ import I3Core
 struct BarWindowInfo: Equatable {
     var title: String
     var pid: pid_t
+    var appName: String
+}
+
+/// One drawn piece of a workspace's container tree: `h[icon icon]`.
+enum BarToken {
+    case letter(String)                         // h v t s f: the container's layout, drawn before its bracket
+    case open                                   // [
+    case close                                  // ]
+    case icon(NSImage?, focused: Bool)          // the window's app icon (nil: a dot)
+}
+
+/// How much a workspace cell shows.
+enum CellDetail: Equatable {
+    case tree               // the container tree with layout letters, brackets and one icon per window
+    case flat(Int)          // up to N app icons (one per app), no structure
+    case none               // just the number
+}
+
+enum CellContent {
+    case none
+    case flat([NSImage], extra: Int)
+    case tree([BarToken])
 }
 
 /// One workspace cell as laid out in the bar (coordinates in the view, top-left origin).
@@ -13,9 +35,7 @@ struct BarCell {
     var workspace: String
     var showing: Bool
     var focused: Bool
-    var icons: [NSImage]
-    var extra: Int          // windows (apps) beyond the icons shown
-    var numberOrigin: NSPoint
+    var content: CellContent
 }
 
 struct BarLayout {
@@ -23,8 +43,9 @@ struct BarLayout {
     var dividers: [CGFloat] = []
     var mode: (text: String, rect: NSRect)?
     var width: CGFloat = 0
-    /// 0 = icons everywhere ... 3 = numbers only; raised automatically when the bar would be too wide.
+    /// Position in the fallback chain (0 = most detail); raised automatically when the bar would be too wide.
     var level = 0
+    var detail = ""
 }
 
 /// A menu bar item that lists the workspaces (grouped by display), marks the one showing on each display
@@ -39,13 +60,15 @@ final class WorkspaceBarController: NSObject {
     private(set) var summary = BarSummary()
     private var info: [WindowID: BarWindowInfo] = [:]
     private var iconMode = "all"
+    private var layoutMode = "tree"
     private var iconCache: [pid_t: NSImage] = [:]
     private(set) var layout = BarLayout()
 
     // MARK: - Configuration & updates
 
-    func configure(enabled: Bool, icons: String) {
+    func configure(enabled: Bool, icons: String, layout: String) {
         iconMode = icons
+        layoutMode = layout
         if enabled { install(); relayout() } else { remove() }
     }
 
@@ -99,18 +122,77 @@ final class WorkspaceBarController: NSObject {
         return out
     }
 
-    private func iconLimit(level: Int, showing: Bool) -> Int {
-        switch level {
-        case 0: return 3
-        case 1: return showing ? 3 : 0
-        case 2: return showing ? 2 : 0
-        default: return 0
+    fileprivate static let bracketFont = NSFont.systemFont(ofSize: 13, weight: .regular)
+    fileprivate static let letterFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .bold)
+
+    /// Width of a token by itself, and the gap that follows it, which depends on what comes next so that
+    /// `]]` stays tight while `] t[` and `icon icon` get a little air.
+    fileprivate static func baseWidth(_ t: BarToken) -> CGFloat {
+        switch t {
+        case .letter(let l): return (l as NSString).size(withAttributes: [.font: letterFont]).width
+        case .open: return ("[" as NSString).size(withAttributes: [.font: bracketFont]).width
+        case .close: return ("]" as NSString).size(withAttributes: [.font: bracketFont]).width
+        case .icon: return 15
         }
     }
 
-    private func makeLayout(level: Int) -> BarLayout {
+    fileprivate static func gap(after i: Int, in toks: [BarToken]) -> CGFloat {
+        guard i + 1 < toks.count else { return 0 }
+        let next = toks[i + 1]
+        switch toks[i] {
+        case .letter: return 0
+        case .open: return 1
+        case .icon: return (next.isIcon || next.isLetter) ? 2 : 0       // before another icon or a nested container
+        case .close: return next.isClose ? 0 : 3                          // ]] tight, but "] t[" separated
+        }
+    }
+
+    fileprivate static func treeWidth(_ toks: [BarToken]) -> CGFloat {
+        toks.indices.reduce(0) { $0 + baseWidth(toks[$1]) + gap(after: $1, in: toks) }
+    }
+
+    /// The workspace as tokens, or nil when it has too many windows to be worth drawing as a tree.
+    private func tokens(for ws: BarWorkspace) -> [BarToken]? {
+        guard ws.windows.count <= 8 else { return nil }
+        var out: [BarToken] = []
+        func walk(_ n: BarNode) {
+            switch n {
+            case .window(let id, let focused):
+                let img = info[id].flatMap { $0.pid != 0 ? icon(for: $0.pid) : nil }
+                out.append(.icon(img, focused: focused))
+            case .container(let letter, let kids):
+                out += [.letter(String(letter)), .open]
+                kids.forEach(walk)
+                out.append(.close)
+            }
+        }
+        // The workspace's own container is drawn like any other, except that plain horizontal stays implicit.
+        (ws.layout == "h" ? ws.nodes : [BarNode.container(ws.layout, ws.nodes)]).forEach(walk)
+        if !ws.floating.isEmpty { walk(.container("f", ws.floating.map { .window($0, focused: false) })) }
+        return out
+    }
+
+    /// Fallback chain, most detail first: each step gives (inactive workspaces, showing workspaces).
+    private func chain() -> [(inactive: CellDetail, showing: CellDetail)] {
+        var c: [(inactive: CellDetail, showing: CellDetail)] = layoutMode == "flat"
+            ? [(.flat(3), .flat(3)), (.none, .flat(3)), (.none, .flat(2)), (.none, .none)]
+            : [(.tree, .tree), (.flat(3), .tree), (.none, .tree), (.none, .flat(3)), (.none, .flat(2)), (.none, .none)]
+        switch iconMode {
+        case "none": c = [c[c.count - 1]]
+        case "active": c = c.filter { $0.inactive == .none }
+        default: break
+        }
+        return c
+    }
+
+    private func describe(_ d: CellDetail) -> String {
+        switch d { case .tree: return "tree"; case .flat(let n): return "icons(\(n))"; case .none: return "number" }
+    }
+
+    private func makeLayout(step: (inactive: CellDetail, showing: CellDetail), level: Int) -> BarLayout {
         var l = BarLayout()
         l.level = level
+        l.detail = "inactive: \(describe(step.inactive)), showing: \(describe(step.showing))"
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         let small = NSFont.systemFont(ofSize: 10, weight: .medium)
         let h = WorkspaceBarController.height
@@ -120,17 +202,31 @@ final class WorkspaceBarController: NSObject {
             if i > 0, !l.cells.isEmpty { x += 4; l.dividers.append(x); x += 6 }
             for ws in out.workspaces {
                 let textW = (ws.name as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
-                let all = icons(for: ws)
-                let shown = Array(all.prefix(iconLimit(level: level, showing: ws.showing)))
-                let extra = shown.isEmpty ? 0 : all.count - shown.count
                 var w = pad + textW
-                if !shown.isEmpty { w += 4 + CGFloat(shown.count) * 15 + CGFloat(shown.count - 1) * 2 }
-                var extraW: CGFloat = 0
-                if extra > 0 { extraW = ("+\(extra)" as NSString).size(withAttributes: [.font: small]).width + 3; w += extraW }
+                var content = CellContent.none
+                var detail = (ws.showing || ws.focused) ? step.showing : step.inactive
+                if case .tree = detail, ws.windows.isEmpty { detail = .none }
+                if case .tree = detail {
+                    if let toks = tokens(for: ws) {
+                        content = .tree(toks)
+                        w += 5 + WorkspaceBarController.treeWidth(toks)
+                    } else {
+                        detail = .flat(3)          // too many windows for a tree: icons only
+                    }
+                }
+                if case .flat(let limit) = detail {
+                    let all = icons(for: ws)
+                    let shown = Array(all.prefix(limit))
+                    if !shown.isEmpty {
+                        let extra = all.count - shown.count
+                        content = .flat(shown.map { $0.0 }, extra: extra)
+                        w += 4 + CGFloat(shown.count) * 15 + CGFloat(shown.count - 1) * 2
+                        if extra > 0 { w += ("+\(extra)" as NSString).size(withAttributes: [.font: small]).width + 3 }
+                    }
+                }
                 w += pad
-                let rect = NSRect(x: x, y: 0, width: w, height: h)
-                l.cells.append(BarCell(rect: rect, workspace: ws.name, showing: ws.showing, focused: ws.focused,
-                                       icons: shown.map { $0.0 }, extra: extra, numberOrigin: NSPoint(x: x + pad, y: 0)))
+                l.cells.append(BarCell(rect: NSRect(x: x, y: 0, width: w, height: h), workspace: ws.name,
+                                       showing: ws.showing, focused: ws.focused, content: content))
                 x += w + 2
             }
         }
@@ -145,16 +241,19 @@ final class WorkspaceBarController: NSObject {
         return l
     }
 
+    /// The most detailed step of the fallback chain that fits the budget (the last one if none does).
+    private func computeLayout() -> BarLayout {
+        let steps = chain()
+        var chosen = makeLayout(step: steps[0], level: 0)
+        for (i, step) in steps.enumerated().dropFirst() where chosen.width > budget {
+            chosen = makeLayout(step: step, level: i)
+        }
+        return chosen
+    }
+
     private func relayout() {
         guard let view, let button = item?.button else { return }
-        // Lowest level (most detail) that fits the budget; an explicit icons setting only raises the floor.
-        let floor = iconMode == "none" ? 3 : (iconMode == "active" ? 1 : 0)
-        var chosen = makeLayout(level: floor)
-        var level = floor
-        while chosen.width > budget, level < 3 {
-            level += 1
-            chosen = makeLayout(level: level)
-        }
+        let chosen = computeLayout()
         layout = chosen
         item?.length = chosen.width
         view.frame = NSRect(x: 0, y: 0, width: chosen.width, height: max(button.bounds.height, WorkspaceBarController.height))
@@ -206,6 +305,30 @@ final class WorkspaceBarController: NSObject {
         if let n = sender.representedObject as? NSNumber { onFocusWindow?(WindowID(truncating: n)) }
     }
 
+    // MARK: - Offscreen preview (mac-i3 bar-preview)
+
+    /// Renders the bar for a summary into an image without a status item, using the real layout and drawing code.
+    static func render(_ summary: BarSummary, info: [WindowID: BarWindowInfo], dark: Bool, layout: String = "tree") -> (rep: NSBitmapImageRep, detail: String, width: CGFloat)? {
+        let c = WorkspaceBarController()
+        c.summary = summary
+        c.info = info
+        c.layoutMode = layout
+        let lay = c.computeLayout()
+        let v = BarView()
+        v.controller = c
+        v.layoutData = lay
+        v.backdrop = NSColor(white: dark ? 0.16 : 0.90, alpha: 1)
+        v.frame = NSRect(x: 0, y: 0, width: lay.width, height: 30)
+        v.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let scale = 3
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(lay.width) * scale, pixelsHigh: 30 * scale,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = v.bounds.size
+        v.cacheDisplay(in: v.bounds, to: rep)
+        return (rep, lay.detail, lay.width)
+    }
+
     // MARK: - Introspection (mac-i3 bar, tests)
 
     /// Screen frame of the item in AX coordinates (top-left origin), and whether it is actually on a display.
@@ -217,10 +340,11 @@ final class WorkspaceBarController: NSObject {
     }
 
     func debugDictionary() -> [String: Any] {
-        var d: [String: Any] = ["enabled": item != nil, "level": layout.level, "mode": summary.mode]
+        var d: [String: Any] = ["enabled": item != nil, "level": layout.level, "detail": layout.detail, "mode": summary.mode]
         d["outputs"] = summary.outputs.map { o -> [String: Any] in
             ["number": o.number, "name": o.name, "workspaces": o.workspaces.map {
-                ["name": $0.name, "showing": $0.showing, "focused": $0.focused, "windows": $0.windows.count] as [String: Any] }]
+                ["name": $0.name, "showing": $0.showing, "focused": $0.focused, "windows": $0.windows.count,
+                 "notation": $0.notation { [info] id in info[id]?.appName ?? "?" }] as [String: Any] }]
         }
         if let f = screenFrame() {
             d["frame"] = ["x": f.rect.x, "y": f.rect.y, "w": f.rect.w, "h": f.rect.h]
@@ -240,6 +364,8 @@ final class WorkspaceBarController: NSObject {
 private final class BarView: NSView {
     weak var controller: WorkspaceBarController?
     var layoutData = BarLayout()
+    /// Only for offscreen previews: the menu bar colour to draw on.
+    var backdrop: NSColor?
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
@@ -250,6 +376,7 @@ private final class BarView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if let backdrop { backdrop.setFill(); bounds.fill() }
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         let small = NSFont.systemFont(ofSize: 10, weight: .medium)
         for x in layoutData.dividers {
@@ -272,15 +399,48 @@ private final class BarView: NSView {
             let size = name.size(withAttributes: [.font: font])
             name.draw(at: NSPoint(x: r.minX + 7, y: r.midY - size.height / 2), withAttributes: [.font: font, .foregroundColor: text])
             var x = r.minX + 7 + size.width.rounded(.up) + 4
-            for img in c.icons {
-                img.draw(in: NSRect(x: x, y: r.midY - 7.5, width: 15, height: 15), from: .zero, operation: .sourceOver,
-                         fraction: (c.showing || c.focused) ? 1 : 0.7, respectFlipped: true, hints: nil)
-                x += 17
-            }
-            if c.extra > 0 {
-                let t = "+\(c.extra)" as NSString
-                let s = t.size(withAttributes: [.font: small])
-                t.draw(at: NSPoint(x: x + 1, y: r.midY - s.height / 2), withAttributes: [.font: small, .foregroundColor: text])
+            let dim = text.withAlphaComponent(0.6)
+            let active = (c.showing || c.focused) ? 1.0 : 0.7
+            switch c.content {
+            case .none:
+                break
+            case .flat(let icons, let extra):
+                for img in icons {
+                    img.draw(in: NSRect(x: x, y: r.midY - 7.5, width: 15, height: 15), from: .zero, operation: .sourceOver,
+                             fraction: active, respectFlipped: true, hints: nil)
+                    x += 17
+                }
+                if extra > 0 {
+                    let t = "+\(extra)" as NSString
+                    let s = t.size(withAttributes: [.font: small])
+                    t.draw(at: NSPoint(x: x + 1, y: r.midY - s.height / 2), withAttributes: [.font: small, .foregroundColor: text])
+                }
+            case .tree(let tokens):
+                x += 1
+                for (i, t) in tokens.enumerated() {
+                    switch t {
+                    case .letter(let l):
+                        let sz = (l as NSString).size(withAttributes: [.font: WorkspaceBarController.letterFont])
+                        (l as NSString).draw(at: NSPoint(x: x, y: r.midY - sz.height / 2), withAttributes: [.font: WorkspaceBarController.letterFont, .foregroundColor: text])
+                    case .open, .close:
+                        let g = (t.isClose ? "]" : "[") as NSString
+                        let sz = g.size(withAttributes: [.font: WorkspaceBarController.bracketFont])
+                        g.draw(at: NSPoint(x: x, y: r.midY - sz.height / 2), withAttributes: [.font: WorkspaceBarController.bracketFont, .foregroundColor: dim])
+                    case .icon(let img, let focused):
+                        let box = NSRect(x: x, y: r.midY - 7.5, width: 15, height: 15)
+                        if let img {
+                            img.draw(in: box, from: .zero, operation: .sourceOver, fraction: active, respectFlipped: true, hints: nil)
+                        } else {
+                            text.setFill()
+                            NSBezierPath(ovalIn: box.insetBy(dx: 5.5, dy: 5.5)).fill()
+                        }
+                        if focused {                       // the window that has keyboard focus
+                            text.setFill()
+                            NSRect(x: box.minX, y: box.maxY + 1, width: box.width, height: 2).fill()
+                        }
+                    }
+                    x += WorkspaceBarController.baseWidth(t) + WorkspaceBarController.gap(after: i, in: tokens)
+                }
             }
         }
         if let m = layoutData.mode {
@@ -307,4 +467,10 @@ private final class BarView: NSView {
         guard let menu = controller?.menu() else { return }
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
+}
+
+private extension BarToken {
+    var isClose: Bool { if case .close = self { return true } else { return false } }
+    var isIcon: Bool { if case .icon = self { return true } else { return false } }
+    var isLetter: Bool { if case .letter = self { return true } else { return false } }
 }

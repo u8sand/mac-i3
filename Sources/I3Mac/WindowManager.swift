@@ -188,7 +188,7 @@ public final class WindowManager {
             }
             bar = b
         }
-        bar?.configure(enabled: config.workspaceBar, icons: config.workspaceBarIcons)
+        bar?.configure(enabled: config.workspaceBar, icons: config.workspaceBarIcons, layout: config.workspaceBarLayout)
         updateBar()
     }
 
@@ -197,7 +197,9 @@ public final class WindowManager {
         let summary = tree.barSummary(mode: mode)
         var info: [WindowID: BarWindowInfo] = [:]
         for o in summary.outputs { for w in o.workspaces { for id in w.windows {
-            info[id] = BarWindowInfo(title: tree.find(id)?.title ?? "", pid: wins[id]?.pid ?? 0)
+            let pid = wins[id]?.pid ?? 0
+            info[id] = BarWindowInfo(title: tree.find(id)?.title ?? "", pid: pid,
+                                     appName: NSRunningApplication(processIdentifier: pid)?.localizedName ?? "")
         } } }
         bar.update(summary, info: info)
     }

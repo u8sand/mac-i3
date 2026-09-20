@@ -14,6 +14,7 @@ USAGE
   mac-i3 tree                 JSON dump of the container tree
   mac-i3 state                JSON dump of workspaces, shapes and the OS-reported window frames
   mac-i3 shape                One-line tree shape per output
+  mac-i3 bar-preview <file.png> [dark] [flat] [crowded]   Render a sample workspace bar offscreen (no daemon)
   mac-i3 outputs              List displays with the numbers to use in `workspace N output <number>`
   mac-i3 modifiers            Show which modifier keys macOS thinks are held (should be none)
   mac-i3 release-modifiers    Clear stuck modifier keys
@@ -89,6 +90,11 @@ case "mouse":
 case "restore":
     let n = WindowManager.restoreOffscreen(quiet: false)
     print("restored \(n) window(s)")
+case "bar-preview":
+    // Developer aid: render a sample workspace bar to a PNG without a daemon.
+    guard let path = args.first(where: { !["dark", "flat", "crowded"].contains($0) }) else { fail("usage: mac-i3 bar-preview <file.png> [dark] [flat] [crowded]") }
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    exit(BarPreview.write(to: path, dark: args.contains("dark"), layout: args.contains("flat") ? "flat" : "tree", crowded: args.contains("crowded")) ? 0 : 1)
 case "outputs":
     // The numbers to use in `workspace N output <number>` (a display name, or part of its product name, also works).
     for o in Displays.listing() {

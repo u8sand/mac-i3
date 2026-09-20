@@ -139,6 +139,9 @@ public enum DefaultConfig {
     # A menu bar item listing the workspaces. Icons: all, active (only on showing workspaces), none.
     # workspace_bar yes
     # workspace_bar_icons all
+    # Each workspace's windows as i3-style containers, e.g. h[icon icon] t[icon v[icon icon]]
+    # (h v t s = horizontal, vertical, tabbed, stacked; f[...] = floating), or flat: just the app icons.
+    # workspace_bar_layout tree
     #
     # Wrap around at the edge of a container when moving focus.
     # focus_wrapping yes

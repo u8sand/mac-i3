@@ -190,4 +190,11 @@ import Testing
         for m in ["all", "active", "none"] { #expect(ConfigParser.parse("workspace_bar_icons \(m)").config.workspaceBarIcons == m) }
         #expect(ConfigParser.parse("workspace_bar_icons huge").errors.count == 1)
     }
+
+    @Test func layoutStyle() {
+        #expect(ConfigParser.parse("").config.workspaceBarLayout == "tree")
+        #expect(ConfigParser.parse("workspace_bar_layout flat").config.workspaceBarLayout == "flat")
+        #expect(ConfigParser.parse("workspace_bar_layout tree").config.workspaceBarLayout == "tree")
+        #expect(ConfigParser.parse("workspace_bar_layout nested").errors.count == 1)
+    }
 }

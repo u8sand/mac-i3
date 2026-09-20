@@ -40,6 +40,8 @@ public struct Config {
     public var workspaceBar = true
     /// `all` (icons on every workspace, dropping them when crowded), `active` (only the showing ones), `none`.
     public var workspaceBarIcons = "all"
+    /// `tree`: draw each workspace's containers as i3-style `h[icon icon]`; `flat`: just the app icons.
+    public var workspaceBarLayout = "tree"
     /// `mouse_warping none|output|window|center`: when the cursor follows keyboard focus (raw value of I3Core.WarpMode).
     public var mouseWarping = "window"
     /// `workspace <name> output <spec>...`: preferred outputs per workspace, most preferred first.
