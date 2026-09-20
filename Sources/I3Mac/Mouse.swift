@@ -171,6 +171,12 @@ public enum MouseInjector {
         e.post(tap: .cghidEventTap)
     }
 
+    /// Current cursor position in screen coordinates (top-left origin, like the Accessibility API).
+    public static func position() -> (x: Double, y: Double) {
+        let p = CGEvent(source: nil)?.location ?? .zero
+        return (Double(p.x), Double(p.y))
+    }
+
     public static func move(_ x: Double, _ y: Double) { post(.mouseMoved, x, y); usleep(40_000) }
     public static func down(_ x: Double, _ y: Double) { move(x, y); post(.leftMouseDown, x, y); usleep(80_000) }
     public static func dragTo(_ x: Double, _ y: Double) { post(.leftMouseDragged, x, y); usleep(12_000) }

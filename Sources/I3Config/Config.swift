@@ -36,6 +36,8 @@ public struct Config {
     public var focusWrapping = true
     /// Drag to resize / move tiled windows (`mouse_gestures no` turns it off).
     public var mouseGestures = true
+    /// `mouse_warping none|output|window|center`: when the cursor follows keyboard focus (raw value of I3Core.WarpMode).
+    public var mouseWarping = "window"
     /// `workspace <name> output <spec>...`: preferred outputs per workspace, most preferred first.
     public var workspaceOutputs: [String: [String]] = [:]
     /// Dropping a dragged window on the middle of another swaps them (default: joins that window's group).

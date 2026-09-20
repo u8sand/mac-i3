@@ -57,6 +57,12 @@ in i3. Clicking a tab in a title bar focuses that window; clicking a window focu
 
 ### Mouse
 
+* **Mouse follows focus.** When you move focus with a key or `mac-i3 msg` (focus, move, workspace switch, closing
+  a window), the cursor jumps to the middle of the newly focused window, unless it is already over it. Clicks,
+  tab clicks, drops and windows that open by themselves never move your cursor. `mouse_warping` picks the
+  behaviour: `window` (default), `center` (always to the exact centre), `output` (only when focus changes display,
+  i3's own behaviour) or `none`.
+
 * **Click** a window: it becomes the focused window, so `$mod+j/k/l/;` continue from it.
 * **Drag a window edge or corner** (tiled windows): the boundary moves and the neighbours reflow. An edge on
   the outer border of the screen cannot move; the window snaps back.
@@ -79,7 +85,7 @@ edges* (System Settings → Desktop & Dock → Windows) so it does not compete w
 
 `~/.config/mac-i3/config` uses i3 syntax (`mac-i3 default-config` prints the built-in one):
 `set`, `bindsym` (incl. `--release`), `mode "name" { ... }`, `exec`, `gaps inner|outer N`,
-`focus_wrapping`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
+`focus_wrapping`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
 Keys are physical (layout independent).
 
 ### Window rules

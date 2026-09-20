@@ -17,7 +17,7 @@ USAGE
   mac-i3 modifiers            Show which modifier keys macOS thinks are held (should be none)
   mac-i3 release-modifiers    Clear stuck modifier keys
   mac-i3 inject <chord>       Post a synthetic key press, e.g. `mac-i3 inject Mod1+Shift+j`
-  mac-i3 mouse <click|down|dragto|up> X Y | drag X1 Y1 X2 Y2
+  mac-i3 mouse pos | move X Y | <click|down|dragto|up> X Y | drag X1 Y1 X2 Y2
                               Post synthetic mouse events (screen coordinates, top-left origin)
   mac-i3 restore              Pull windows stranded off-screen back onto the display
   mac-i3 doctor               Check permissions and environment
@@ -74,12 +74,16 @@ case "mouse":
         fail("mac-i3 mouse: refusing to press at \(Int(n[0])),\(Int(n[1])): the window there belongs to \(owner), not \(ProcessInfo.processInfo.environment["MAC_I3_MOUSE_GUARD"] ?? "")")
     }
     switch (args.first, n.count) {
+    case ("pos", 0):
+        let p = MouseInjector.position()
+        print("\(Int(p.x.rounded())) \(Int(p.y.rounded()))")
+    case ("move", 2): MouseInjector.move(n[0], n[1])
     case ("click", 2): MouseInjector.click(n[0], n[1])
     case ("down", 2): MouseInjector.down(n[0], n[1])
     case ("dragto", 2): MouseInjector.dragTo(n[0], n[1])
     case ("up", 2): MouseInjector.up(n[0], n[1])
     case ("drag", 4): MouseInjector.drag(from: (n[0], n[1]), to: (n[2], n[3]))
-    default: fail("usage: mac-i3 mouse click|down|dragto|up X Y  |  drag X1 Y1 X2 Y2")
+    default: fail("usage: mac-i3 mouse pos | move X Y | click|down|dragto|up X Y | drag X1 Y1 X2 Y2")
     }
 case "restore":
     let n = WindowManager.restoreOffscreen(quiet: false)
