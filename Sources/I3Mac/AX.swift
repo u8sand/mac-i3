@@ -60,15 +60,24 @@ enum AX {
 
     /// Move a window to a target frame.
     ///
-    /// macOS silently drops size changes that would leave a window straddling two displays (it still
-    /// reports success), e.g. shrinking a full-display window after moving it sideways. So the window is
-    /// first parked at the origin of the target display, where any size up to the display size is legal,
-    /// then resized, then moved to its final position. The result is read back and repeated if it did
-    /// not stick.
+    /// macOS silently drops size changes in two situations, and reports success either way:
+    ///  * a window that would straddle two displays (e.g. shrinking a full-display window after moving it
+    ///    sideways), and
+    ///  * a window that is bigger than the display it was just moved onto (a 1920pt-wide window moved to an
+    ///    1800pt display cannot be shrunk there).
+    /// So: shrink the window to fit the target display *before* moving it (while it is still on a display
+    /// where it fits), park it at the origin of the target display, resize, then move to the final position.
+    /// The result is read back and the sequence repeated if it did not stick.
     static func setFrame(_ el: AXUIElement, _ r: Rect) {
         let anchor = Displays.outputs().first { $0.rect.contains(x: r.midX, y: r.midY) }?.rect
         for attempt in 0..<3 {
-            if let a = anchor { setPosition(el, x: a.x, y: a.y) }
+            if let a = anchor {
+                if let f = frame(el), f.w > a.w || f.h > a.h {
+                    // Fit the target display first; a retry also drops the height, which unsticks stubborn windows.
+                    setSize(el, w: min(f.w, a.w), h: min(f.h, attempt == 0 ? a.h : a.h * 0.8))
+                }
+                setPosition(el, x: a.x, y: a.y)
+            }
             setSize(el, w: r.w, h: r.h)
             setPosition(el, x: r.x, y: r.y)
             guard attempt < 2, let f = frame(el), abs(f.w - r.w) > 24 || abs(f.h - r.h) > 24 else { return }

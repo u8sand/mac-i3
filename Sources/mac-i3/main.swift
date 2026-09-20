@@ -10,6 +10,7 @@ USAGE
         Start the window manager (foreground). Listens for i3's key bindings.
         --only limits management to the named apps (name or bundle id); handy for testing.
   mac-i3 msg <i3 command>     Run an i3 command in the running daemon, e.g. `mac-i3 msg 'split v; layout tabbed'`
+  mac-i3 bar                  JSON of what the menu bar workspace list shows (and where it is on screen)
   mac-i3 tree                 JSON dump of the container tree
   mac-i3 state                JSON dump of workspaces, shapes and the OS-reported window frames
   mac-i3 shape                One-line tree shape per output
@@ -54,7 +55,7 @@ case "run":
 case "msg":
     guard !args.isEmpty else { fail("usage: mac-i3 msg <command>") }
     client(args.joined(separator: " "))
-case "tree", "state", "shape", "reconcile", "ping":
+case "tree", "state", "shape", "bar", "reconcile", "ping":
     client(sub)
 case "modifiers":
     let held = KeyInjector.heldModifiers()

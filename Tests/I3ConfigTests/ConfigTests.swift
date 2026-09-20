@@ -138,3 +138,15 @@ import Testing
         #expect(ConfigParser.parse("mouse_warping sideways").errors.count == 1)
     }
 }
+
+
+@Suite struct WorkspaceBarOptions {
+    @Test func defaultsAndParsing() {
+        let d = ConfigParser.parse("").config
+        #expect(d.workspaceBar && d.workspaceBarIcons == "all")
+        #expect(!ConfigParser.parse("workspace_bar no").config.workspaceBar)
+        #expect(ConfigParser.parse("workspace_bar yes").config.workspaceBar)
+        for m in ["all", "active", "none"] { #expect(ConfigParser.parse("workspace_bar_icons \(m)").config.workspaceBarIcons == m) }
+        #expect(ConfigParser.parse("workspace_bar_icons huge").errors.count == 1)
+    }
+}

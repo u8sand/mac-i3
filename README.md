@@ -85,7 +85,7 @@ edges* (System Settings → Desktop & Dock → Windows) so it does not compete w
 
 `~/.config/mac-i3/config` uses i3 syntax (`mac-i3 default-config` prints the built-in one):
 `set`, `bindsym` (incl. `--release`), `mode "name" { ... }`, `exec`, `gaps inner|outer N`,
-`focus_wrapping`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
+`focus_wrapping`, `workspace_bar yes|no`, `workspace_bar_icons all|active|none`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
 Keys are physical (layout independent).
 
 ### Window rules
@@ -106,6 +106,36 @@ for_window [app="^(Terminal|iTerm2)$"] floating disable
 With this, `$mod+Shift+Space` floats or tiles the focused window on demand. Note that
 `focus left/right/up/down` only navigates between *tiled* windows; floating windows are reached with the
 mouse or `$mod+Space` (`focus mode_toggle`), and `move <dir>` nudges them by 10px.
+
+### Workspace bar
+
+A menu bar item lists your workspaces, so you can always see where you are:
+
+```
+ 1 ▣▣   2 ▣   ⟦3 ▣▣▣⟧ ┃ 4 ▣   ⟦5 ▣⟧        resize
+```
+
+* Workspaces are grouped **by display** (in `output N` order, primary first, separated by a divider).
+* The workspace **showing** on each display has a soft highlight; the one with **keyboard focus** is filled
+  with the accent colour.
+* Each workspace shows an **icon per app** (up to 3, then `+N`). When the item would get too wide for the
+  menu bar it drops the icons from inactive workspaces, then shrinks the count, and finally shows numbers only,
+  so it never crowds out your other menu bar items.
+* Only workspaces that exist are listed (they have windows or are showing), sorted numerically.
+* The current binding mode (e.g. `resize`) appears as an orange tag while it is active.
+* **Click** a workspace to switch to it. **Right-click** (or ctrl-click) for a menu of every window, grouped by
+  workspace; choosing one focuses it. Clicking the bar never moves the mouse cursor.
+
+```
+workspace_bar yes|no                 # default yes
+workspace_bar_icons all|active|none  # default all: icons everywhere (dropped when crowded); active: only on showing workspaces
+```
+
+`mac-i3 bar` prints what the bar shows and where it is on screen, and `mac-i3 doctor` warns if macOS is hiding
+it. **macOS only draws the menu bar on the primary display** while displays share a Space (the default), so the
+bar lists all displays' workspaces in one place. On a Mac with a notch a crowded menu bar can hide the item
+behind the notch: Cmd-drag other items out of the way, or use `workspace_bar_icons none`. You can also Cmd-drag
+the bar item itself to where you want it; macOS remembers.
 
 ### Workspaces and displays
 

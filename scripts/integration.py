@@ -27,8 +27,9 @@ os.environ["MAC_I3_MOUSE_GUARD"] = "mac-i3"
 os.environ["MAC_I3_SOCKET"] = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}.sock")
 
 
-def run(*args, timeout=10):
-    return subprocess.run([BIN, *args], capture_output=True, text=True, timeout=timeout)
+def run(*args, timeout=10, env=None):
+    return subprocess.run([BIN, *args], capture_output=True, text=True, timeout=timeout,
+                          env={**os.environ, **env} if env else None)
 
 
 class Daemon:
@@ -105,8 +106,10 @@ class Daemon:
         raise AssertionError(f"timed out waiting for {what}\nstate: {json.dumps(s, indent=1)[:1500]}")
 
     # -- mouse ------------------------------------------------------------------------------
-    def click(self, pt, settle=0.6):
-        r = run("mouse", "click", str(pt[0]), str(pt[1]))
+    def click(self, pt, settle=0.6, also=None):
+        """`also`: another app whose window may be under the press (e.g. the menu bar item, which macOS hosts in Control Center)."""
+        env = {"MAC_I3_MOUSE_GUARD": os.environ["MAC_I3_MOUSE_GUARD"] + "," + also} if also else None
+        r = run("mouse", "click", str(pt[0]), str(pt[1]), env=env)
         assert r.returncode == 0, r.stderr.strip()
         time.sleep(settle)
 
@@ -690,13 +693,62 @@ def s_mouse_warp_output(d):
     d.spawn("A"); d.spawn("B")
     spot = (O0["x"] + O0["w"] * 0.9, O0["y"] + O0["h"] * 0.9)
     _place_cursor(*spot)
-    d.key("Mod1+j")                                                            # same display: no warp
+    d.key("Mod1+j"); d.key("Mod1+semicolon")                                   # focus A, then B: same display, no warp
     _expect_cursor(spot, "focus within a display must not warp: ", tol=3)
-    d.key("Mod1+Shift+semicolon")                                              # A moves to display 2 with focus
-    _expect_cursor(_centre(d, "A"), "focus changed display: ")
+    d.key("Mod1+Shift+semicolon")                                              # B is the right-most window: it moves to display 2
+    _expect_cursor(_centre(d, "B"), "focus changed display: ")
     assert _cursor()[0] >= O1["x"], "the cursor should now be on the second display"
 s_mouse_warp_output.config = "mouse_warping output\n"
 s_mouse_warp_center.config = "mouse_warping center\n"
+
+
+def _bar():
+    return json.loads(run("bar").stdout)
+
+
+def _bar_workspaces(b, output=0):
+    """Workspaces the bar lists for one display (0 = the primary)."""
+    return {w["name"]: w for w in b["outputs"][output]["workspaces"]}
+
+
+def s_workspace_bar(d):
+    """The menu bar item lists workspaces with windows, marks showing/focused, shows the binding mode, and
+    switches workspace when a cell is clicked."""
+    b = d.wait(lambda s: True, "daemon") and _bar()
+    assert b["enabled"], "the workspace bar should be enabled by this scenario's config"
+    d.spawn("A"); d.spawn("B")
+    b = _bar()
+    assert b.get("visible"), f"the bar item is not visible on screen (hidden by the notch / a full menu bar?): {b.get('frame')}"
+    ws = _bar_workspaces(b)
+    assert list(ws) == ["1"] and ws["1"]["showing"] and ws["1"]["focused"] and ws["1"]["windows"] == 2, ws
+    if len(b["outputs"]) > 1:                                        # a second display lists its own showing workspace
+        other = _bar_workspaces(b, 1)
+        assert len(other) == 1 and next(iter(other.values()))["showing"] and not next(iter(other.values()))["focused"], other
+    d.key("Mod1+3")                                                  # empty, but showing
+    ws = _bar_workspaces(_bar())
+    assert sorted(ws) == ["1", "3"] and ws["3"]["focused"] and ws["3"]["showing"] and not ws["1"]["showing"], ws
+    d.spawn("C")
+    d.key("Mod1+4"); d.key("Mod1+3")                                 # workspace 4 was empty and hidden again: gone
+    ws = _bar_workspaces(_bar())
+    assert sorted(ws) == ["1", "3"] and ws["3"]["windows"] == 1, ws
+    d.key("Mod1+r")
+    assert _bar()["mode"] == "resize", "binding mode should show in the bar"
+    d.key("Return")
+    assert _bar()["mode"] == "default"
+    b = _bar()
+    cell = next(c for c in b["cells"] if c["workspace"] == "1")
+    pt = (cell["x"] + cell["w"] / 2, cell["y"] + cell["h"] / 2)
+    f = b["frame"]
+    assert f["x"] <= pt[0] <= f["x"] + f["w"] and f["y"] <= pt[1] <= f["y"] + f["h"], "the cell must lie inside the item's own frame"
+    d.click(pt, settle=0.8, also="Control Center")                   # a real click on the "1" cell (macOS hosts menu bar items in Control Center)
+    assert d.state()["workspace"] == "1", "clicking the cell for workspace 1 should switch to it"
+    assert _bar_workspaces(_bar())["1"]["focused"]
+s_workspace_bar.config = "workspace_bar yes\n"
+
+
+def s_workspace_bar_off(d):
+    """workspace_bar no: no menu bar item at all."""
+    assert _bar()["enabled"] is False
 
 
 SCENARIOS = [(n[2:], f) for n, f in sorted(globals().items()) if n.startswith("s_") and callable(f)]
@@ -717,7 +769,7 @@ def main():
         # user's ~/.config/mac-i3/config, whose $mod or bindings would change what the keystrokes do.
         path = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}.conf")
         with open(path, "w") as fh:
-            fh.write(run("default-config").stdout + "\nmouse_warping none\n" + (getattr(fn, "config", None) or ""))
+            fh.write(run("default-config").stdout + "\nmouse_warping none\nworkspace_bar no\n" + (getattr(fn, "config", None) or ""))
         args += ["--config", path]
         d = Daemon(args, only=getattr(fn, "only", "mac-i3"))
         t0 = time.time()

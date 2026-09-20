@@ -154,12 +154,13 @@ public enum MouseInjector {
         return nil
     }
 
-    /// With `MAC_I3_MOUSE_GUARD=<app>` set, a press is refused unless that app's window is topmost under
+    /// With `MAC_I3_MOUSE_GUARD=<app>[,<app>...]` set, a press is refused unless one of those apps' windows is topmost under
     /// the cursor, so a scripted test can never grab one of your real windows. Returns the offender.
     public static func guardViolation(x: Double, y: Double) -> String? {
-        guard let allowed = ProcessInfo.processInfo.environment["MAC_I3_MOUSE_GUARD"], !allowed.isEmpty else { return nil }
+        guard let list = ProcessInfo.processInfo.environment["MAC_I3_MOUSE_GUARD"], !list.isEmpty else { return nil }
+        let allowed = list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         let owner = topWindowOwner(x: x, y: y)
-        return owner == allowed ? nil : (owner ?? "nothing")
+        return owner.map(allowed.contains) == true ? nil : (owner ?? "nothing")
     }
 
     private static func post(_ type: CGEventType, _ x: Double, _ y: Double) {
