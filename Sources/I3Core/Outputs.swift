@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 mac-i3 contributors
+
 import Foundation
 
 // Workspace <-> output assignment (`workspace 1 output HDMI-1`, `move workspace to output ...`).

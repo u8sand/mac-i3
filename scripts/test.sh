@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 mac-i3 contributors
+
 # Runs the unit tests with the Command Line Tools' Swift Testing (no full Xcode needed).
 set -e
 cd "$(dirname "$0")/.."

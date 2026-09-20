@@ -1,4 +1,8 @@
+<p align="center"><img src="docs/icon.png" width="128" alt="mac-i3 icon"></p>
+
 # mac-i3
+
+**[github.com/u8sand/mac-i3](https://github.com/u8sand/mac-i3)** · [Releases](https://github.com/u8sand/mac-i3/releases) · GPL-3.0-or-later
 
 i3 window management for macOS, as a single CLI. Run `mac-i3`, and it listens for key bindings (Option-based
 by default) and tiles, focuses and moves your windows the way i3 does.
@@ -7,17 +11,59 @@ It implements i3's real container tree (arbitrary nesting, per-container layouts
 focus stacks, `split`, tabbed/stacked with title bars, floating, fullscreen, workspaces, multiple
 outputs), rather than a simplified grid.
 
-## Build & run
+## Install (the app)
+
+1. Download `mac-i3-<version>.dmg` (or the `.zip`) from the [Releases page](https://github.com/u8sand/mac-i3/releases), open it and drag
+   **mac-i3** onto **Applications**.
+2. Open it from Applications. The build is **not notarized** (that needs a paid Apple Developer account), so macOS
+   says it cannot verify the app the first time: right-click **mac-i3** > **Open** > **Open**, once. Or, in Terminal:
+   `xattr -dr com.apple.quarantine /Applications/mac-i3.app`.
+3. It explains what it needs, then asks for two permissions in **System Settings > Privacy & Security**:
+   **Accessibility** (to move and focus windows) and **Input Monitoring** (to see your key bindings). Turn on
+   **mac-i3** in both lists; it starts by itself as soon as you do. (The permissions belong to the app, not to your
+   terminal. Quit AeroSpace / yabai first, since two window managers will fight.)
+
+mac-i3 lives in the **menu bar** (no Dock icon): the workspace list, or a small tiling glyph if you set
+`workspace_bar no`. Right-click it (or click the glyph) for **Reload Config**, **Edit Config…**, **Open Log**,
+**Launch at Login**, **About** and **Quit**. Your configuration is `~/.config/mac-i3/config` (Edit Config creates it
+from the built-in default the first time); warnings and config errors go to `~/Library/Logs/mac-i3.log`.
+
+* **Command line:** the app contains the CLI. To use `mac-i3 msg …` and friends from a terminal:
+  `sudo ln -s /Applications/mac-i3.app/Contents/MacOS/mac-i3 /usr/local/bin/mac-i3`.
+* **Updating:** quit mac-i3, replace the app in Applications, open it. Because the build is ad-hoc signed, macOS ties
+  the permissions to that exact build, so after an update you may have to switch mac-i3 off and on again (or remove it
+  with `-` and re-add it) in the two Privacy lists. A build signed with a Developer ID keeps them.
+* **Uninstall:** choose Quit, delete `/Applications/mac-i3.app`, and optionally `~/.config/mac-i3`; remove mac-i3 from
+  the Privacy lists and Login Items in System Settings.
+
+### Building the app yourself
 
 ```sh
+scripts/package.sh          # -> dist/mac-i3.app, dist/mac-i3-<version>.dmg, dist/mac-i3-<version>.zip, SHA256SUMS
+```
+
+It builds arm64 and x86_64 separately and merges them with `lipo` (SwiftPM's own universal build needs Xcode), renders
+the icon from code (`mac-i3 render-icon`), writes `Info.plist` from `packaging/Info.plist.in` (version from the `VERSION`
+file, bundle id `io.github.u8sand.mac-i3`) and signs the bundle. Knobs: `BUNDLE_ID`, `VERSION`, `BUILD`, `ARCHS`. For a
+build that opens everywhere with no warning, sign with a Developer ID and notarize (needs an Apple Developer account and
+a `notarytool store-credentials` profile):
+
+```sh
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=mac-i3 scripts/package.sh
+```
+
+## Build from source & run
+
+```sh
+git clone https://github.com/u8sand/mac-i3 && cd mac-i3
 swift build -c release          # binary: .build/release/mac-i3
 .build/release/mac-i3 doctor    # check permissions
 .build/release/mac-i3           # run (foreground); Ctrl-C restores parked windows
 ```
 
-**Permissions** (System Settings → Privacy & Security): grant **Accessibility** and **Input Monitoring**
-to the app that launches `mac-i3` (Terminal, iTerm, VS Code...). Quit AeroSpace/yabai first — two window
-managers will fight.
+**Permissions** when run from a terminal (System Settings → Privacy & Security): grant **Accessibility** and
+**Input Monitoring** to the app that launches `mac-i3` (Terminal, iTerm, VS Code...). Quit AeroSpace/yabai first —
+two window managers will fight.
 
 ### Trying it safely
 
@@ -242,7 +288,8 @@ Commands: `focus left|right|up|down|parent|child|mode_toggle|output <dir>`, `mov
 * `Sources/I3Config` — i3 config parser and the embedded default config.
 * `Sources/I3Mac` — Accessibility API window control, global key tap (`CGEventTap`), display geometry,
   title-bar overlays, IPC socket (`~/.config/mac-i3/ipc.sock`).
-* `Sources/mac-i3` — the CLI.
+* `Sources/mac-i3` — the CLI (and the app's executable).
+* `scripts/package.sh`, `packaging/` — the `.app` / `.dmg` / `.zip` build; `Sources/I3Mac/AppIcon.swift` draws the icon.
 
 **Workspaces are virtual.** macOS has no public API for switching Spaces, so inactive workspaces (and
 inactive tabs) are parked at the bottom-right corner of the right-most display, leaving a 1px sliver.
@@ -252,6 +299,7 @@ inactive tabs) are parked at the bottom-right corner of the right-most display, 
 ```sh
 scripts/test.sh                         # unit tests, incl. a 12k-session randomized fuzz of the tree
 FUZZ_SEEDS=6000 scripts/test.sh         # longer soak
+scripts/check-license.sh                # every source file has its GPL-3.0-or-later header
 scripts/integration.py [name...]        # end-to-end scenarios (mouse ones: `scripts/integration.py mouse`)
 ```
 
@@ -276,3 +324,19 @@ were left held down system-wide.
 * Option+key chords that are bound are swallowed, so apps that use Option as Meta lose those chords.
 * `restart` re-reads all windows; the layout tree is rebuilt (windows are re-tiled in creation order).
 * Multi-display: workspace-per-output works; hot-plugging is handled, but is less tested than the rest.
+
+## License
+
+mac-i3 is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License**
+as published by the Free Software Foundation, either **version 3 of the License, or (at your option) any later version**
+(SPDX: `GPL-3.0-or-later`; the text is in [LICENSE](LICENSE)). You can use, study, share and modify it; if you distribute
+it, or a modified version, you must do so under the same license and make the corresponding source code available. It is
+distributed in the hope that it will be useful, but **without any warranty**; see the license for details.
+
+**Source code:** the complete corresponding source of every release is in this repository,
+[github.com/u8sand/mac-i3](https://github.com/u8sand/mac-i3) (a release `vX.Y.Z` is the tag with that name; `mac-i3 version`
+tells you which build you have). Bug reports and pull requests are welcome there.
+
+Every source file carries an SPDX header (`scripts/check-license.sh` verifies this), and the license text is also inside
+the app (`Contents/Resources/LICENSE`) and the disk image. mac-i3 depends on nothing beyond Apple's system frameworks and
+Swift, and the icon is drawn by the code in this repository, so the whole project is covered by the one license.

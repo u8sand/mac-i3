@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 mac-i3 contributors
+
 import Foundation
 
 // i3 semantics for focus / move / split / layout / resize, ported from i3's src/tree.c,
