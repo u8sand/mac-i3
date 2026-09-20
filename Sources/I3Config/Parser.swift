@@ -86,6 +86,8 @@ public enum ConfigParser {
                 if p.count == 2, let v = Double(p[1]) {
                     if p[0] == "inner" { cfg.innerGap = v } else if p[0] == "outer" { cfg.outerGap = v }
                 }
+            case "mouse_gestures":
+                cfg.mouseGestures = !(rest == "no" || rest == "off" || rest == "false")
             case "focus_wrapping":
                 cfg.focusWrapping = !(rest == "no")
             case "exec", "exec_always":

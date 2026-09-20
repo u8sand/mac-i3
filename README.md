@@ -55,11 +55,29 @@ daemon also does this on start.
 Windows open next to the focused one; `split` decides the direction of the *next* window, exactly as
 in i3. Clicking a tab in a title bar focuses that window; clicking a window focuses it in the tree.
 
+### Mouse
+
+* **Click** a window: it becomes the focused window, so `$mod+j/k/l/;` continue from it.
+* **Drag a window edge or corner** (tiled windows): the boundary moves and the neighbours reflow. An edge on
+  the outer border of the screen cannot move; the window snaps back.
+* **Drag a window by its title bar** and drop it on another window; a translucent preview shows where it will go:
+  * on the **outer quarter of an edge**: it goes beside that window on that side (splitting the slot if the
+    layout runs the other way),
+  * in the **middle**: the two windows swap places,
+  * on **another display**: it joins the window under the cursor there, or that display's workspace if it is empty,
+  * dropped on its own slot, a floating window, or nothing: it snaps back.
+* **Floating windows** are moved and resized freely and never affect the tiled layout.
+
+Whether a drag moves or resizes is decided by *where you grabbed* (title bar/content vs. border), never by
+the size afterwards, because macOS resizes a window that no longer fits when you drop it on a smaller display.
+`mouse_gestures no` in the config turns all of this off. Turn off macOS's own *Tile by dragging windows to screen
+edges* (System Settings → Desktop & Dock → Windows) so it does not compete with drop-to-move.
+
 ## Configuration
 
 `~/.config/mac-i3/config` uses i3 syntax (`mac-i3 default-config` prints the built-in one):
 `set`, `bindsym` (incl. `--release`), `mode "name" { ... }`, `exec`, `gaps inner|outer N`,
-`focus_wrapping`, `for_window`, `assign` (see below).
+`focus_wrapping`, `mouse_gestures yes|no`, `for_window`, `assign` (see below).
 Keys are physical (layout independent).
 
 ### Window rules
@@ -118,7 +136,10 @@ mac-i3 msg 'split v; layout tabbed'   # any i3 command, `;`-separated
 mac-i3 shape                          # H[1 V[2 3*]]-style one-liner per output (* = focus)
 mac-i3 tree                           # full JSON tree
 mac-i3 state                          # tree + the window frames macOS reports right now
-mac-i3 inject Mod1+Shift+j            # synthesize a key press
+mac-i3 inject Mod1+Shift+j            # synthesize a key press (sent like a keyboard: modifiers pressed and released)
+mac-i3 mouse drag 240 51 1750 600     # synthesize a mouse drag (screen coordinates, top-left origin)
+mac-i3 modifiers                      # which modifier keys macOS thinks are held: should print "none"
+mac-i3 release-modifiers              # clear stuck modifiers (an Option stuck down turns clicks into hide-app clicks)
 ```
 
 Commands: `focus left|right|up|down|parent|child|mode_toggle|output <dir>`, `move <dir>`,
@@ -141,18 +162,21 @@ inactive tabs) are parked at the bottom-right corner of the right-most display, 
 ## Testing
 
 ```sh
-scripts/test.sh                         # 49 unit tests, incl. a 12k-session randomized fuzz of the tree
+scripts/test.sh                         # unit tests, incl. a 12k-session randomized fuzz of the tree
 FUZZ_SEEDS=6000 scripts/test.sh         # longer soak
-scripts/integration.py [name...]        # 14 end-to-end scenarios
+scripts/integration.py [name...]        # end-to-end scenarios (mouse ones: `scripts/integration.py mouse`)
 ```
 
 The integration suite starts a scoped daemon, opens labelled windows, **injects real key presses**, and
 asserts on the frames and focus that macOS reports through the Accessibility API (tiling, splits,
-focus/move, workspaces, tabbed/stacked, kill, resize mode, floating, fullscreen, multi-monitor, rules,
+focus/move, workspaces, tabbed/stacked, kill, resize mode, floating, fullscreen, multi-monitor, rules, mouse
+click/resize/drag-to-move (incl. across displays),
 restart, crash recovery, and real Terminal.app windows — skipped if Terminal is already running).
 It needs no other window manager running, and **refuses to start while another `mac-i3` daemon is running**
 (e.g. the one you use day to day). It talks to its daemons over a private socket (`MAC_I3_SOCKET`), so it never
-touches a real daemon's `~/.config/mac-i3/ipc.sock`.
+touches a real daemon's `~/.config/mac-i3/ipc.sock`. Synthetic mouse presses are refused unless the topmost window
+under the cursor belongs to a test window (`MAC_I3_MOUSE_GUARD`), and every scenario asserts that no modifier keys
+were left held down system-wide.
 
 ## Known limitations
 

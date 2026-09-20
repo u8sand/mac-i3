@@ -82,3 +82,12 @@ import Testing
         #expect(Criteria(#"[title="foo("]"#).matches(app: "a", title: "a foo( b"))
     }
 }
+
+@Suite struct MouseOption {
+    @Test func gesturesAreOnByDefaultAndCanBeDisabled() {
+        #expect(ConfigParser.parse("").config.mouseGestures)
+        #expect(!ConfigParser.parse("mouse_gestures no").config.mouseGestures)
+        #expect(!ConfigParser.parse("mouse_gestures off").config.mouseGestures)
+        #expect(ConfigParser.parse("mouse_gestures yes").config.mouseGestures)
+    }
+}

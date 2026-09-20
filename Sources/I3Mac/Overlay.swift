@@ -13,7 +13,44 @@ final class OverlayController {
         for p in panels.dropFirst(bars.count) { p.orderOut(nil) }
     }
 
-    func hideAll() { panels.forEach { $0.orderOut(nil) } }
+    private var previewPanel: PreviewPanel?
+
+    /// Translucent rectangle showing where a dragged window would land.
+    func showPreview(_ r: Rect) {
+        if previewPanel == nil { previewPanel = PreviewPanel() }
+        previewPanel?.show(r)
+    }
+
+    func hidePreview() { previewPanel?.orderOut(nil) }
+
+    func hideAll() { panels.forEach { $0.orderOut(nil) }; hidePreview() }
+}
+
+private final class PreviewPanel: NSPanel {
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor(srgbRed: 0.16, green: 0.33, blue: 0.47, alpha: 0.35).cgColor
+        v.layer?.borderColor = NSColor(srgbRed: 0.30, green: 0.47, blue: 0.60, alpha: 0.95).cgColor
+        v.layer?.borderWidth = 3
+        contentView = v
+    }
+
+    func show(_ r: Rect) {
+        let primaryH = NSScreen.screens.first?.frame.height ?? 0
+        let frame = NSRect(x: r.x, y: primaryH - r.maxY, width: r.w, height: r.h)
+        if self.frame != frame { setFrame(frame, display: false) }
+        orderFrontRegardless()
+    }
 }
 
 private final class BarPanel: NSPanel {

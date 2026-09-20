@@ -61,22 +61,62 @@ private func keyTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CG
 }
 
 /// Posts synthetic key presses (used by `mac-i3 inject` and the integration tests).
+///
+/// A chord is sent the way a keyboard sends it: each modifier is pressed as a real modifier key event,
+/// then the key, then the modifiers are released in reverse order. Merely stamping flags on the key
+/// event leaves the system-wide modifier state stuck (Option/Shift never "released"), which turns every
+/// later real mouse click into an Option-click that hides apps.
 public enum KeyInjector {
+    private static let modifierKeys: [(mod: Modifiers, code: CGKeyCode, flag: CGEventFlags)] = [
+        (.control, 59, .maskControl), (.option, 58, .maskAlternate), (.shift, 56, .maskShift), (.command, 55, .maskCommand),
+    ]
+
+    private static func post(_ code: CGKeyCode, down: Bool, flags: CGEventFlags, modifier: Bool, _ src: CGEventSource?) {
+        guard let e = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down) else { return }
+        if modifier { e.type = .flagsChanged }
+        e.flags = flags
+        e.post(tap: .cghidEventTap)
+        usleep(8_000)
+    }
+
     public static func press(_ chord: String) -> Bool {
         guard let (mods, code) = ConfigParser.parseChord(chord) else { return false }
-        var flags = CGEventFlags()
-        if mods.contains(.shift) { flags.insert(.maskShift) }
-        if mods.contains(.control) { flags.insert(.maskControl) }
-        if mods.contains(.option) { flags.insert(.maskAlternate) }
-        if mods.contains(.command) { flags.insert(.maskCommand) }
         let src = CGEventSource(stateID: .hidSystemState)
-        guard let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true),
-              let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) else { return false }
-        down.flags = flags
-        up.flags = flags
-        down.post(tap: .cghidEventTap)
-        usleep(20_000)
-        up.post(tap: .cghidEventTap)
+        let held = modifierKeys.filter { mods.contains($0.mod) }
+        var flags = CGEventFlags()
+        for m in held {
+            flags.insert(m.flag)
+            post(m.code, down: true, flags: flags, modifier: true, src)
+        }
+        post(CGKeyCode(code), down: true, flags: flags, modifier: false, src)
+        usleep(12_000)
+        post(CGKeyCode(code), down: false, flags: flags, modifier: false, src)
+        for m in held.reversed() {
+            flags.remove(m.flag)
+            post(m.code, down: false, flags: flags, modifier: true, src)
+        }
         return true
+    }
+
+    /// Modifier keys the system currently believes are held, as chord names.
+    public static func heldModifiers() -> [String] {
+        let f = CGEventSource.flagsState(.hidSystemState)
+        var out: [String] = []
+        if f.contains(.maskAlternate) { out.append("Option") }
+        if f.contains(.maskShift) { out.append("Shift") }
+        if f.contains(.maskControl) { out.append("Control") }
+        if f.contains(.maskCommand) { out.append("Command") }
+        return out
+    }
+
+    /// Recovery: tell the system every modifier key was released.
+    public static func releaseModifiers() {
+        let src = CGEventSource(stateID: .hidSystemState)
+        for code: CGKeyCode in [54, 55, 56, 57, 58, 59, 60, 61, 62, 63] {
+            guard let e = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) else { continue }
+            e.flags = []
+            e.post(tap: .cghidEventTap)
+            usleep(5_000)
+        }
     }
 }

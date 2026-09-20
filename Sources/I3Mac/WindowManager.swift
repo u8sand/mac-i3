@@ -40,6 +40,12 @@ public final class WindowManager {
     /// Set when a rule moved a new window away from the focus, so OS focus must be restored, not adopted.
     var reclaimFocus = false
     var lastOutputs: [String] = []
+    var mouseMonitor: Any?
+    /// Consecutive passes in which a known window was not listed (see `reconcile`).
+    var missing: [WindowID: Int] = [:]
+    var gesture: Gesture?
+    /// Frame verification pauses while the mouse is in use, so it cannot undo a drag before it is read.
+    var lastMouseActivity = Date.distantPast
 
     let keyTap = KeyTap()
     let ipc = IPCServer()
@@ -83,6 +89,7 @@ public final class WindowManager {
         keyTap.handler = { [weak self] code, mods, down in self?.handleKey(code, mods, down) ?? false }
         if !keyTap.start() { FileHandle.standardError.write(Data("mac-i3: could not create key tap (Input Monitoring permission?). Key bindings disabled.\n".utf8)) }
 
+        installMouseMonitor()
         installSignalHandlers()
         let nc = NSWorkspace.shared.notificationCenter
         for n in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
@@ -292,7 +299,10 @@ public final class WindowManager {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
             AXUIElementSetMessagingTimeout(axApp, 0.5)
             ensureObserver(app, axApp)
-            guard let list = AX.attr(axApp, kAXWindowsAttribute) as? [AXUIElement] else { continue }
+            guard let list = AX.attr(axApp, kAXWindowsAttribute) as? [AXUIElement] else {
+                log("AX window list unavailable for \(app.localizedName ?? "?") (pid \(app.processIdentifier))")
+                continue
+            }
             for w in list {
                 guard AX.string(w, kAXRoleAttribute) == kAXWindowRole,
                       AX.bool(w, kAXMinimizedAttribute) != true,
@@ -362,7 +372,17 @@ public final class WindowManager {
 
         let found = enumerate()
         let foundIDs = Set(found.map { $0.id })
+        for id in foundIDs { missing[id] = nil }
         for id in tree.allWindowIDs where !foundIDs.contains(id) {
+            // A window that is merely unlisted for a moment (its app is busy, e.g. mid-drag) stays; one whose
+            // element is dead, or that stays unlisted for a second pass, is really gone.
+            missing[id, default: 0] += 1
+            if missing[id]! < 2, let w = wins[id], AX.exists(w.element) {
+                log("? window \(id) not listed; keeping it for now")
+                continue
+            }
+            log("- window \(id) \"\(tree.find(id)?.title ?? "")\" gone")
+            missing[id] = nil
             tree.removeWindow(id)
             wins[id] = nil; applied[id] = nil; retries[id] = nil; parked.remove(id)
             changed = true
@@ -399,9 +419,12 @@ public final class WindowManager {
 
     /// Adopt focus changes made by the user (mouse click, Cmd-Tab), not ones we just requested.
     func syncFocusFromOS() -> Bool {
+        // Right after we moved focus ourselves the OS may still report the old window; ignore that
+        // sample entirely (do not record it), so a click made in that moment is still adopted later.
+        guard Date().timeIntervalSince(focusPushedAt) > 0.5 else { return false }
         let os = osFocusedWindowID()
         defer { lastOSFocus = os }
-        guard Date().timeIntervalSince(focusPushedAt) > 0.5, let os, os != lastOSFocus else { return false }
+        guard let os, os != lastOSFocus else { return false }
         guard tree.find(os) != nil else { return false }
         lastAppliedFocus = os
         if tree.focusedWindowID == os { return false }
@@ -486,7 +509,7 @@ public final class WindowManager {
     /// Snap windows back if something (or the user) moved them; give up after a few tries so
     /// apps with minimum sizes / cell-grid snapping (Terminal) do not fight us forever.
     func verifyFrames() {
-        guard NSEvent.pressedMouseButtons == 0 else { return }
+        guard NSEvent.pressedMouseButtons == 0, Date().timeIntervalSince(lastMouseActivity) > 0.6 else { return }
         for (id, want) in applied {
             guard !parked.contains(id), let w = wins[id], (retries[id] ?? 0) < 2, let actual = AX.frame(w.element) else { continue }
             if let con = tree.find(id), con.isFloating { continue }

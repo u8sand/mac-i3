@@ -84,6 +84,22 @@ func violations(_ t: Tree) -> [String] {
                 let id = rng.pick(t.allWindowIDs)
                 op = "os-focus \(id)"
                 t.focusWindow(id)
+            } else if r < 38 {
+                let a = rng.pick(t.allWindowIDs), b = rng.pick(t.allWindowIDs)
+                let zone = rng.pick([DropZone.left, .right, .top, .bottom, .center])
+                op = "drop \(a) onto \(b) \(zone)"
+                t.dropWindow(a, onto: b, zone: zone)
+            } else if r < 42 {
+                let id = rng.pick(t.allWindowIDs)
+                let d = { Double(Int(rng.next() % 400)) - 200 }
+                let (l, rr, tp, bt) = (d(), d(), d(), d())
+                op = "resize \(id) l\(l) r\(rr) t\(tp) b\(bt)"
+                t.resizeByEdges(id, left: l, right: rr, top: tp, bottom: bt)
+            } else if r < 44 && outputs > 1 {
+                let id = rng.pick(t.allWindowIDs)
+                let name = rng.pick(specs).name
+                op = "drop \(id) on output \(name)"
+                t.dropWindow(id, onOutput: name)
             } else {
                 op = rng.pick(Fuzz.commands)
                 var errs: [String] = []

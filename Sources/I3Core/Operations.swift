@@ -92,6 +92,12 @@ extension Tree {
             }
             con = encapsulate(con)
         }
+        splitContainer(con, orientation)
+    }
+
+    /// Make `con` (a window or split container) the sole occupant of a new split container with the
+    /// given orientation, or just reorient its parent when it is an only child (as i3's `split` does).
+    func splitContainer(_ con: Con, _ orientation: Orientation) {
         guard let parent = con.parent else { return }
         if parent.children.count == 1 && !parent.layout.isTabLike {
             parent.layout = .split(orientation)

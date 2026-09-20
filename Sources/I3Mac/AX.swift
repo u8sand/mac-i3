@@ -75,6 +75,13 @@ enum AX {
         }
     }
 
+    /// False only when the element is definitively gone. Timeouts and "app busy" errors (which happen
+    /// while an app is in the middle of a window drag) do not mean the window closed.
+    static func exists(_ el: AXUIElement) -> Bool {
+        var v: CFTypeRef?
+        return AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &v) != .invalidUIElement
+    }
+
     static func isSettable(_ el: AXUIElement, _ name: String) -> Bool {
         var settable: DarwinBoolean = false
         return AXUIElementIsAttributeSettable(el, name as CFString, &settable) == .success && settable.boolValue

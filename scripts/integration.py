@@ -22,6 +22,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.environ.get("MAC_I3", os.path.join(ROOT, ".build/debug/mac-i3"))
 TOL = 3
 # A private socket: the tests must never read, replace or delete a real daemon's socket.
+# Synthetic presses are only allowed on test windows: a mistake must never grab one of your own windows.
+os.environ["MAC_I3_MOUSE_GUARD"] = "mac-i3"
 os.environ["MAC_I3_SOCKET"] = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}.sock")
 
 
@@ -101,6 +103,36 @@ class Daemon:
                 return s
             time.sleep(0.15)
         raise AssertionError(f"timed out waiting for {what}\nstate: {json.dumps(s, indent=1)[:1500]}")
+
+    # -- mouse ------------------------------------------------------------------------------
+    def click(self, pt, settle=0.6):
+        r = run("mouse", "click", str(pt[0]), str(pt[1]))
+        assert r.returncode == 0, r.stderr.strip()
+        time.sleep(settle)
+
+    def drag(self, a, b, settle=1.0):
+        r = run("mouse", "drag", str(a[0]), str(a[1]), str(b[0]), str(b[1]), timeout=20)
+        assert r.returncode == 0, r.stderr.strip()
+        time.sleep(settle)
+
+    def titlebar(self, title):
+        f = self.frame(title)
+        return (f[0] + f[2] / 2 - 60, f[1] + 12)
+
+    def body(self, title):
+        f = self.frame(title)
+        return (f[0] + f[2] / 2, f[1] + f[3] / 2 + 60)
+
+    def zone(self, title, zone):
+        """A point inside window `title` that selects the given drop zone."""
+        f = self.frame(title)
+        cx, cy = f[0] + f[2] / 2, f[1] + f[3] / 2
+        return {"left": (f[0] + f[2] * 0.08, cy), "right": (f[0] + f[2] * 0.92, cy),
+                "top": (cx, f[1] + f[3] * 0.08), "bottom": (cx, f[1] + f[3] * 0.92), "center": (cx, cy)}[zone]
+
+    def tree_focus(self, s=None):
+        s = s or self.state()
+        return next((w["title"] for w in s["windows"] if w["focused"]), None)
 
     # -- queries ----------------------------------------------------------------------------
     def win(self, title, s=None):
@@ -419,6 +451,100 @@ for_window [title="^Tiled$"] floating disable
 '''
 
 
+def s_mouse_click_focus(d):
+    """Clicking a window makes it the focused one in the tree, so keyboard navigation continues from it."""
+    d.spawn("A"); d.spawn("B"); d.spawn("C")
+    d.click(d.body("A"))
+    d.wait(lambda s: d.tree_focus(s) == "A", "tree focus to follow a click on A")
+    d.key("Mod1+semicolon")
+    d.expect_focus("B", "keyboard navigation should continue from the clicked window: ")
+    # A click right after a keyboard focus change must not be swallowed by the settle window.
+    d.key("Mod1+semicolon", settle=False)
+    time.sleep(0.12)
+    d.click(d.body("A"), settle=0.2)
+    d.wait(lambda s: d.tree_focus(s) == "A", "click made right after a key press to be adopted", timeout=3)
+    d.expect_focus("A")
+
+
+def s_mouse_resize(d):
+    """Dragging a window edge moves the boundary and the neighbours reflow."""
+    O = d.output()
+    d.spawn("A"); d.spawn("B")
+    a = d.frame("A"); edge = a[0] + a[2]; my = a[1] + a[3] / 2
+    d.drag((edge - 1, my), (edge + 149, my))                         # A's right edge, 150px right
+    d.expect_frame("A", (O["x"], O["y"], O["w"] / 2 + 150, O["h"]), "right edge: ", tol=4)
+    d.expect_frame("B", (O["x"] + O["w"] / 2 + 150, O["y"], O["w"] / 2 - 150, O["h"]), tol=4)
+    b = d.frame("B")
+    d.drag((b[0] + 1, my), (b[0] - 149, my))                         # B's left edge, back 150px left
+    d.expect_frame("A", (O["x"], O["y"], O["w"] / 2, O["h"]), "left edge (same boundary): ", tol=4)
+    d.expect_frame("B", (O["x"] + O["w"] / 2, O["y"], O["w"] / 2, O["h"]), tol=4)
+    # a screen-border edge cannot move: the window snaps back
+    d.drag((O["x"] + 1, my), (O["x"] + 101, my))
+    d.expect_frame("A", (O["x"], O["y"], O["w"] / 2, O["h"]), "screen-border edge must snap back: ", tol=4)
+    # a vertical boundary inside a column
+    d.click(d.body("B"))
+    d.key("Mod1+v"); d.spawn("C")                                    # A | (B / C)
+    b = d.frame("B"); bx = b[0] + b[2] / 2
+    d.drag((bx, b[1] + b[3] - 1), (bx, b[1] + b[3] + 99))            # B's bottom edge, 100px down
+    d.expect_frame("B", (b[0], b[1], b[2], b[3] + 100), "bottom edge: ", tol=4)
+    d.expect_frame("C", (b[0], b[1] + b[3] + 100, b[2], O["h"] - b[3] - 100), tol=4)
+    d.expect_frame("A", (O["x"], O["y"], O["w"] / 2, O["h"]), "A must not change: ", tol=4)
+
+
+def s_mouse_move(d):
+    """Dragging a window by its title bar and dropping it puts it where it was dropped."""
+    O = d.output()
+    d.spawn("A"); d.spawn("B"); d.spawn("C")                         # A B C
+    w3 = O["w"] / 3
+    d.drag(d.titlebar("A"), d.zone("C", "right"))                    # right edge of C -> B C A
+    d.expect_frame("B", (O["x"], O["y"], w3, O["h"]), "drop on right edge: ", tol=4)
+    d.expect_frame("C", (O["x"] + w3, O["y"], w3, O["h"]), tol=4)
+    d.expect_frame("A", (O["x"] + 2 * w3, O["y"], w3, O["h"]), tol=4)
+    d.drag(d.titlebar("C"), d.zone("B", "top"))                      # top of B -> [C over B] | A
+    d.expect_frame("C", (O["x"], O["y"], O["w"] / 2, O["h"] / 2), "drop on top edge: ", tol=4)
+    d.expect_frame("B", (O["x"], O["y"] + O["h"] / 2, O["w"] / 2, O["h"] / 2), tol=4)
+    d.expect_frame("A", (O["x"] + O["w"] / 2, O["y"], O["w"] / 2, O["h"]), tol=4)
+    d.drag(d.titlebar("A"), d.zone("B", "center"))                   # middle of B -> swap A and B
+    d.expect_frame("A", (O["x"], O["y"] + O["h"] / 2, O["w"] / 2, O["h"] / 2), "drop in the middle swaps: ", tol=4)
+    d.expect_frame("B", (O["x"] + O["w"] / 2, O["y"], O["w"] / 2, O["h"]), tol=4)
+    d.expect_frame("C", (O["x"], O["y"], O["w"] / 2, O["h"] / 2), tol=4)
+    # dropped back inside its own slot: nothing changes, the window snaps back
+    b = d.frame("B")
+    d.drag(d.titlebar("B"), (d.titlebar("B")[0] + 150, d.titlebar("B")[1] + 200))
+    d.expect_frame("B", b, "a drag that ends on its own slot must snap back: ", tol=4)
+    assert d.tree_focus() == "B"
+
+
+def s_mouse_floating(d):
+    """Dragging a floating window just moves it; the tiled layout is left alone."""
+    d.spawn("A"); d.spawn("B"); d.spawn("C")
+    d.key("Mod1+Shift+space")                                        # C floats
+    fa, fb, fc = d.frame("A"), d.frame("B"), d.frame("C")
+    d.drag(d.titlebar("C"), (d.titlebar("C")[0] - 200, d.titlebar("C")[1] + 80))
+    got = d.frame("C")
+    assert abs(got[0] - (fc[0] - 200)) <= 8 and abs(got[1] - (fc[1] + 80)) <= 8, f"floating window should follow the drag: {fc} -> {got}"
+    assert d.win("C")["floating"]
+    d.expect_frame("A", fa, "tiled A must not move: ", tol=4)
+    d.expect_frame("B", fb, "tiled B must not move: ", tol=4)
+    d.settle(1.0)
+    assert all(abs(x - y) <= 8 for x, y in zip(d.frame("C"), got)), "floating window must stay where it was dropped"
+
+
+def s_mouse_multi_monitor(d):
+    """Dropping a window on another display's empty workspace or on one of its windows moves it there."""
+    outs = d.state()["outputs"]
+    if len(outs) < 2:
+        return "SKIP (single display)"
+    O0, O1 = outs[0], outs[1]
+    d.spawn("A"); d.spawn("B")
+    d.drag(d.titlebar("B"), (O1["x"] + O1["w"] / 2, O1["y"] + O1["h"] / 2))
+    d.expect_frame("A", (O0["x"], O0["y"], O0["w"], O0["h"]), "A alone on display 1: ", tol=4)
+    d.expect_frame("B", (O1["x"], O1["y"], O1["w"], O1["h"]), "B moved to display 2: ", tol=4)
+    d.drag(d.titlebar("B"), d.zone("A", "right"))
+    d.expect_frame("A", (O0["x"], O0["y"], O0["w"] / 2, O0["h"]), "B dropped back onto A's right edge: ", tol=4)
+    d.expect_frame("B", (O0["x"] + O0["w"] / 2, O0["y"], O0["w"] / 2, O0["h"]), tol=4)
+
+
 SCENARIOS = [(n[2:], f) for n, f in sorted(globals().items()) if n.startswith("s_") and callable(f)]
 
 
@@ -444,9 +570,12 @@ def main():
         try:
             d.start()
             r = fn(d)
+            held = run("modifiers").stdout.strip()
+            assert held == "none", f"the test left modifier keys held down system-wide: {held} (would turn real clicks into Option-clicks)"
             print(f"{'SKIP' if r else 'PASS'}  {name:24s} ({time.time() - t0:.1f}s){'  ' + r if r else ''}")
         except Exception as e:  # noqa: BLE001
             failures += 1
+            run("release-modifiers")
             print(f"FAIL  {name:24s} ({time.time() - t0:.1f}s)\n      {str(e).replace(chr(10), chr(10) + '      ')}")
         finally:
             d.stop()
