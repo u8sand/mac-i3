@@ -36,10 +36,14 @@ extension WindowManager {
         }
     }
 
-    /// Focus moved as a consequence of a command that completes later (closing a window): warp then.
-    func warpAfterDeferredFocusChange(to id: WindowID, layout res: LayoutResult) {
-        guard Date() < warpUntil, NSEvent.pressedMouseButtons == 0, let f = res.frames[id] else { return }
-        warpUntil = .distantPast
+    /// A close command was issued for `warpAway`; once that window is really gone, the cursor follows focus to
+    /// whatever window has it now. Checked after every layout pass, independent of how the new focus was
+    /// reached (the OS usually reports the neighbour as focused itself, which the focus sync adopts first).
+    func warpAfterWindowClosed(layout res: LayoutResult) {
+        guard let gone = warpAway, Date() < warpUntil else { warpAway = nil; return }
+        guard tree.find(gone) == nil else { return }             // not closed yet (or the app refused)
+        warpAway = nil
+        guard NSEvent.pressedMouseButtons == 0, let id = res.focusedWindow, let f = res.frames[id] else { return }
         if let p = warpDestination(mode: warpMode, focusChanged: true, frameChanged: false, outputChanged: false,
                                    cursor: MouseInjector.position(), target: f) {
             warpCursor(to: p)

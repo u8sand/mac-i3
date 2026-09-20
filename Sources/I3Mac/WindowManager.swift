@@ -41,8 +41,11 @@ public final class WindowManager {
     var reclaimFocus = false
     var lastOutputs: [String] = []
     var mouseMonitor: Any?
+    /// The workspace list in the menu bar.
+    var bar: WorkspaceBarController?
     /// Set when a command (closing a window) will move focus a moment later: the cursor should follow then.
     var warpUntil = Date.distantPast
+    var warpAway: WindowID?
     /// Consecutive passes in which a known window was not listed (see `reconcile`).
     var missing: [WindowID: Int] = [:]
     var gesture: Gesture?
@@ -134,6 +137,7 @@ public final class WindowManager {
         keyTap.stop()
         ipc.stop()
         overlay?.hideAll()
+        bar?.remove()
         restoreOffscreenWindows(quiet: true)
         exit(0)
     }
@@ -163,6 +167,39 @@ public final class WindowManager {
         tree.focusWrapping = config.focusWrapping
         tree.setWorkspaceOutputs(config.workspaceOutputs)
         if bindingIndex[mode] == nil { mode = "default" }
+        configureBar()
+    }
+
+    // MARK: - Workspace bar
+
+    func configureBar() {
+        if bar == nil {
+            let b = WorkspaceBarController()
+            // Clicks on the bar are mouse actions: apply them directly, so `mouse_warping` does not move the cursor.
+            b.onSwitch = { [weak self] name in
+                guard let self else { return }
+                self.tree.switchWorkspace(name)
+                self.applyLayout()
+            }
+            b.onFocusWindow = { [weak self] id in
+                guard let self else { return }
+                self.tree.focusWindow(id)
+                self.applyLayout()
+            }
+            bar = b
+        }
+        bar?.configure(enabled: config.workspaceBar, icons: config.workspaceBarIcons)
+        updateBar()
+    }
+
+    func updateBar() {
+        guard let bar else { return }
+        let summary = tree.barSummary(mode: mode)
+        var info: [WindowID: BarWindowInfo] = [:]
+        for o in summary.outputs { for w in o.workspaces { for id in w.windows {
+            info[id] = BarWindowInfo(title: tree.find(id)?.title ?? "", pid: wins[id]?.pid ?? 0)
+        } } }
+        bar.update(summary, info: info)
     }
 
     // MARK: - Input
@@ -193,7 +230,8 @@ public final class WindowManager {
         case .exec(let cmd): execShell(cmd)
         case .kill(let id):
             closeWindow(id)
-            warpUntil = Date().addingTimeInterval(1.5)   // focus moves to a neighbour once the window is gone
+            warpAway = id
+            warpUntil = Date().addingTimeInterval(2.5)   // focus moves to a neighbour once the window is gone
         case .mode(let m):
             if bindingIndex[m] != nil { mode = m } else { log("unknown mode \(m)") }
         case .reload:
@@ -235,6 +273,8 @@ public final class WindowManager {
         case "ping": return "pong"
         case "tree":
             return json(tree.jsonTree())
+        case "bar":
+            return json(bar?.debugDictionary() ?? ["enabled": false])
         case "state":
             reconcile()
             return json(stateDictionary())
@@ -501,6 +541,8 @@ public final class WindowManager {
         }
         overlay?.update(bars: res.bars, tree: tree)
         pushFocus(res)
+        warpAfterWindowClosed(layout: res)
+        updateBar()
         return res
     }
 
@@ -508,7 +550,6 @@ public final class WindowManager {
         let target = res.focusedWindow
         defer { lastAppliedFocus = target }
         guard let id = target, id != lastAppliedFocus, let w = wins[id] else { return }
-        warpAfterDeferredFocusChange(to: id, layout: res)
         focusPushedAt = Date()
         let app = AXUIElementCreateApplication(w.pid)
         AX.set(app, kAXFrontmostAttribute, kCFBooleanTrue)

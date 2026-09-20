@@ -36,6 +36,10 @@ public struct Config {
     public var focusWrapping = true
     /// Drag to resize / move tiled windows (`mouse_gestures no` turns it off).
     public var mouseGestures = true
+    /// Show the workspace bar item in the menu bar.
+    public var workspaceBar = true
+    /// `all` (icons on every workspace, dropping them when crowded), `active` (only the showing ones), `none`.
+    public var workspaceBarIcons = "all"
     /// `mouse_warping none|output|window|center`: when the cursor follows keyboard focus (raw value of I3Core.WarpMode).
     public var mouseWarping = "window"
     /// `workspace <name> output <spec>...`: preferred outputs per workspace, most preferred first.

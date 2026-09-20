@@ -34,6 +34,12 @@ func runDoctor() -> Never {
     check(r.errors.isEmpty, "Config parses (\(FileManager.default.fileExists(atPath: path) ? path : "built-in default"))")
     for e in r.errors { print("       \(e)") }
     let running = IPC.send("ping", timeout: 1) == "pong"
+    if running, let json = IPC.send("bar", timeout: 2), let d = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+       d["enabled"] as? Bool == true {
+        let visible = d["visible"] as? Bool ?? false
+        check(visible, "Workspace bar is visible in the menu bar",
+              hint: "macOS hides menu bar items that do not fit (the notch, many other items). Cmd-drag other items away, or set workspace_bar_icons none.")
+    }
     print("[info] daemon \(running ? "is running" : "is not running")")
     exit(bad ? 1 : 0)
 }

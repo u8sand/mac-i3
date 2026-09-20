@@ -11,6 +11,11 @@ public enum DefaultConfig {
     # cursor is already over it), center (always), output (only when focus changes display), none.
     # mouse_warping window
 
+    # Workspace bar: a menu bar item listing the workspaces (numbers + app icons, the showing one per display
+    # highlighted). Click to switch, right-click for a list of windows.
+    # workspace_bar yes
+    # workspace_bar_icons all       # all | active (icons only on showing workspaces) | none
+
     # Which display a workspace lives on. `output 1` is the primary display, `output 2`, `3`... the others
     # from left to right (see `mac-i3 outputs`). A workspace whose output is not connected lives on the
     # primary display, and moves to its output when it is plugged in.

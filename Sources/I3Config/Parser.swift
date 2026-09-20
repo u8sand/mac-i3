@@ -107,6 +107,11 @@ public enum ConfigParser {
                 var name = Array(t[..<i])
                 if name.first == "number" { name.removeFirst() }
                 cfg.workspaceOutputs[name.joined(separator: " ")] = Array(t[(i + 1)...])
+            case "workspace_bar":
+                cfg.workspaceBar = !(rest == "no" || rest == "off" || rest == "false")
+            case "workspace_bar_icons":
+                if ["all", "active", "none"].contains(rest) { cfg.workspaceBarIcons = rest }
+                else { errors.append("line \(lineNo): workspace_bar_icons must be all, active or none") }
             case "mouse_warping":
                 if ["none", "output", "window", "center"].contains(rest) { cfg.mouseWarping = rest }
                 else { errors.append("line \(lineNo): mouse_warping must be none, output, window or center") }
