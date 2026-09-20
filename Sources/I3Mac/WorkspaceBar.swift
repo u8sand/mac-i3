@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 mac-i3 contributors
+
 import AppKit
 import I3Core
 
@@ -48,12 +51,25 @@ struct BarLayout {
     var detail = ""
 }
 
+/// What the app menu (the items below the window list) can do; set by the daemon.
+struct AppActions {
+    var reload: () -> Void = {}
+    var restart: () -> Void = {}
+    var quit: () -> Void = {}
+}
+
 /// A menu bar item that lists the workspaces (grouped by display), marks the one showing on each display
 /// and the one with keyboard focus, and shows an icon per app. Click a workspace to switch to it; right-click
 /// (or ctrl-click) for a menu of every window.
-final class WorkspaceBarController: NSObject {
+final class WorkspaceBarController: NSObject, NSMenuDelegate {
     var onSwitch: ((String) -> Void)?
     var onFocusWindow: ((WindowID) -> Void)?
+    var actions = AppActions()
+    /// True while mac-i3 is waiting for macOS permissions: the item shows the glyph and a "grant access" menu.
+    private(set) var needsPermission = false
+    private var barEnabled = true
+    private var glyphWhenDisabled = false
+    private var glyphMenu: NSMenu?
 
     private var item: NSStatusItem?
     private var view: BarView?
@@ -66,17 +82,26 @@ final class WorkspaceBarController: NSObject {
 
     // MARK: - Configuration & updates
 
-    func configure(enabled: Bool, icons: String, layout: String) {
+    /// `glyphWhenDisabled`: with `workspace_bar no`, still show a small glyph so the app can be reached from the
+    /// menu bar (true for the .app, false for command-line runs, which have a terminal to quit from).
+    func configure(enabled: Bool, icons: String, layout: String, glyphWhenDisabled: Bool) {
         iconMode = icons
         layoutMode = layout
-        if enabled { install(); relayout() } else { remove() }
+        barEnabled = enabled
+        self.glyphWhenDisabled = glyphWhenDisabled
+        refreshPresence()
+    }
+
+    func setNeedsPermission(_ needs: Bool) {
+        needsPermission = needs
+        refreshPresence()
     }
 
     func update(_ s: BarSummary, info i: [WindowID: BarWindowInfo]) {
         guard s != summary || i != info else { return }
         summary = s
         info = i
-        relayout()
+        if showsBar { relayout() }
     }
 
     func remove() {
@@ -85,16 +110,52 @@ final class WorkspaceBarController: NSObject {
         view = nil
     }
 
+    /// The workspace list is showing (as opposed to just the glyph, or nothing).
+    private var showsBar: Bool { item != nil && barEnabled && !needsPermission }
+
+    /// Decide what the menu bar item is right now: the workspace list, the glyph, or nothing.
+    private func refreshPresence() {
+        let wantsGlyph = needsPermission || (!barEnabled && glyphWhenDisabled)
+        guard barEnabled || wantsGlyph else { remove(); return }
+        install()
+        guard let item, let button = item.button else { return }
+        if showsBar {
+            item.menu = nil
+            button.image = nil
+            if view == nil || view?.superview == nil { attachBarView(to: button) }
+            relayout()
+        } else {
+            view?.removeFromSuperview()
+            view = nil
+            button.image = AppIcon.menuBarImage()
+            button.toolTip = needsPermission ? "mac-i3 needs permission to run" : "mac-i3"
+            item.length = NSStatusItem.variableLength
+            item.menu = glyphMenu
+        }
+    }
+
     private func install() {
         guard item == nil else { return }
         let it = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         it.autosaveName = "mac-i3-workspaces"       // macOS remembers where you Cmd-dragged it
+        let m = NSMenu()
+        m.delegate = self
+        glyphMenu = m
+        item = it
+    }
+
+    private func attachBarView(to button: NSStatusBarButton) {
         let v = BarView()
         v.controller = self
         v.autoresizingMask = [.width, .height]
-        it.button?.addSubview(v)
-        item = it
+        button.addSubview(v)
         view = v
+    }
+
+    // The glyph's menu is rebuilt each time it opens, so it always reflects the current windows.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        for i in (needsPermission ? permissionItems() : windowItems() + appItems()) { menu.addItem(i) }
     }
 
     // MARK: - Layout
@@ -265,36 +326,95 @@ final class WorkspaceBarController: NSObject {
 
     func click(cell: BarCell) { onSwitch?(cell.workspace) }
 
+    /// The menu shown by right-clicking the bar: windows by workspace, then the app items.
     func menu() -> NSMenu {
         let menu = NSMenu()
+        for i in windowItems() + appItems() { menu.addItem(i) }
+        return menu
+    }
+
+    private func action(_ title: String, _ sel: Selector, key: String = "") -> NSMenuItem {
+        let it = NSMenuItem(title: title, action: sel, keyEquivalent: key)
+        it.target = self
+        return it
+    }
+
+    private func windowItems() -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
         for out in summary.outputs where !out.workspaces.isEmpty {
             if summary.outputs.count > 1 {
                 let header = NSMenuItem(title: "Display \(out.number)", action: nil, keyEquivalent: "")
                 header.isEnabled = false
-                menu.addItem(header)
+                items.append(header)
             }
             for ws in out.workspaces {
                 let title = "Workspace \(ws.name)" + (ws.showing ? "  (showing)" : "")
-                let head = NSMenuItem(title: title, action: #selector(pickWorkspace(_:)), keyEquivalent: "")
-                head.target = self
+                let head = action(title, #selector(pickWorkspace(_:)))
                 head.representedObject = ws.name
                 head.state = ws.focused ? .on : .off
-                menu.addItem(head)
+                items.append(head)
                 for id in ws.windows {
                     let w = info[id]
                     let name = (w?.title.isEmpty ?? true) ? "(untitled)" : w!.title
-                    let it = NSMenuItem(title: name, action: #selector(pickWindow(_:)), keyEquivalent: "")
-                    it.target = self
+                    let it = action(name, #selector(pickWindow(_:)))
                     it.representedObject = NSNumber(value: id)
                     it.indentationLevel = 1
                     if let pid = w?.pid, let img = icon(for: pid) { it.image = img }
-                    menu.addItem(it)
+                    items.append(it)
                 }
             }
-            menu.addItem(.separator())
+            items.append(.separator())
         }
-        if menu.items.last?.isSeparatorItem == true { menu.removeItem(at: menu.items.count - 1) }
-        return menu
+        return items
+    }
+
+    private func appItems() -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        items.append(action("Reload Config", #selector(doReload)))
+        items.append(action("Edit Config…", #selector(doEditConfig)))
+        items.append(action("Open Log", #selector(doOpenLog)))
+        items.append(.separator())
+        if AppInfo.isBundled {
+            let login = action("Launch at Login", #selector(doToggleLogin))
+            login.state = AppInfo.loginItemEnabled ? .on : .off
+            items.append(login)
+        }
+        items.append(action("About mac-i3", #selector(doAbout)))
+        items.append(action("Quit mac-i3", #selector(doQuit), key: "q"))
+        return items
+    }
+
+    private func permissionItems() -> [NSMenuItem] {
+        func note(_ title: String) -> NSMenuItem {
+            let i = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            i.isEnabled = false
+            return i
+        }
+        let ax = AppInfo.accessibilityAllowed, im = AppInfo.inputMonitoringAllowed
+        return [note("mac-i3 needs permission to run"),
+                note((ax ? "✓ " : "✗ ") + "Accessibility: " + (ax ? "allowed" : "not allowed")),
+                note((im ? "✓ " : "✗ ") + "Input Monitoring: " + (im ? "allowed" : "not allowed")),
+                note("Listed but still ✗? Remove mac-i3 with −, then reopen it."),
+                .separator(),
+                action("Open Accessibility Settings…", #selector(doOpenAccessibility)),
+                action("Open Input Monitoring Settings…", #selector(doOpenInputMonitoring)),
+                action("Restart mac-i3", #selector(doRestart)),
+                .separator(),
+                action("Quit mac-i3", #selector(doQuit), key: "q")]
+    }
+
+    @objc private func doReload() { actions.reload() }
+    @objc private func doRestart() { actions.restart() }
+    @objc private func doQuit() { actions.quit() }
+    @objc private func doEditConfig() { AppInfo.editConfig() }
+    @objc private func doOpenLog() { AppInfo.openLog() }
+    @objc private func doAbout() { AppInfo.about() }
+    @objc private func doOpenAccessibility() { AppInfo.openSettings(AppInfo.accessibilityPane) }
+    @objc private func doOpenInputMonitoring() { AppInfo.openSettings(AppInfo.inputMonitoringPane) }
+    @objc private func doToggleLogin() {
+        if let err = AppInfo.setLoginItem(!AppInfo.loginItemEnabled) {
+            AppInfo.alert("Could not change the login item", err, buttons: ["OK"])
+        }
     }
 
     @objc private func pickWorkspace(_ sender: NSMenuItem) {
@@ -340,12 +460,14 @@ final class WorkspaceBarController: NSObject {
     }
 
     func debugDictionary() -> [String: Any] {
-        var d: [String: Any] = ["enabled": item != nil, "level": layout.level, "detail": layout.detail, "mode": summary.mode]
+        var d: [String: Any] = ["enabled": showsBar, "presence": item == nil ? "none" : (showsBar ? "bar" : "glyph"),
+                                "needsPermission": needsPermission, "level": layout.level, "detail": layout.detail, "mode": summary.mode]
         d["outputs"] = summary.outputs.map { o -> [String: Any] in
             ["number": o.number, "name": o.name, "workspaces": o.workspaces.map {
                 ["name": $0.name, "showing": $0.showing, "focused": $0.focused, "windows": $0.windows.count,
                  "notation": $0.notation { [info] id in info[id]?.appName ?? "?" }] as [String: Any] }]
         }
+        d["menu"] = (needsPermission ? permissionItems() : windowItems() + appItems()).map { $0.isSeparatorItem ? "-" : $0.title }
         if let f = screenFrame() {
             d["frame"] = ["x": f.rect.x, "y": f.rect.y, "w": f.rect.w, "h": f.rect.h]
             d["visible"] = f.visible

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 mac-i3 contributors
+
 import Foundation
 
 /// Parses the subset of i3's config syntax that is meaningful on macOS.

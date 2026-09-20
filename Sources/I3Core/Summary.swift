@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 mac-i3 contributors
+
 import Foundation
 
 /// A node of a workspace's container tree, as the bar draws it: a window, or a container with its layout

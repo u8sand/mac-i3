@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 mac-i3 contributors
+
 import AppKit
 import ApplicationServices
 import I3Config
@@ -41,6 +44,9 @@ public final class WindowManager {
     var reclaimFocus = false
     var lastOutputs: [String] = []
     var mouseMonitor: Any?
+    /// `start()` has run (windows are being managed). Guards against starting twice and against sweeping windows on quit.
+    var started = false
+    var permissionTimer: Timer?
     /// The workspace list in the menu bar.
     var bar: WorkspaceBarController?
     /// Set when a command (closing a window) will move focus a moment later: the cursor should follow then.
@@ -70,16 +76,72 @@ public final class WindowManager {
 
     /// Starts everything and runs the main loop forever.
     public func run() -> Never {
-        guard AXIsProcessTrusted() else {
-            FileHandle.standardError.write(Data("mac-i3: Accessibility permission missing. Run `mac-i3 doctor`.\n".utf8))
-            exit(1)
-        }
+        AppInfo.redirectLogsIfBundled()
         if IPC.send("ping", timeout: 1) == "pong" {
-            FileHandle.standardError.write(Data("mac-i3: already running.\n".utf8))
+            if AppInfo.isBundled {
+                NSApplication.shared.setActivationPolicy(.accessory)
+                AppInfo.alert("mac-i3 is already running", "Look for its icon in the menu bar.", buttons: ["OK"])
+            } else {
+                FileHandle.standardError.write(Data("mac-i3: already running.\n".utf8))
+            }
             exit(1)
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+        installSignalHandlers()
+        if !AXIsProcessTrusted() {
+            guard AppInfo.isBundled else {
+                FileHandle.standardError.write(Data("mac-i3: Accessibility permission missing for the app that launched it (your terminal). Run `mac-i3 doctor`.\n".utf8))
+                exit(1)
+            }
+            waitForPermissions()
+        } else {
+            start()
+        }
+        app.run()
+        exit(0)
+    }
+
+    /// Running as an app without access yet: keep a warning glyph in the menu bar, explain once, register in the
+    /// Privacy lists, and start by itself the moment Accessibility is granted. The watcher is started first and runs
+    /// in every run-loop mode, so it notices the grant even while the explanation is still on screen.
+    func waitForPermissions() {
+        ensureBar().setNeedsPermission(true)
+        AppInfo.note("Accessibility permission missing: waiting for it (Input Monitoring: \(AppInfo.inputMonitoringAllowed ? "allowed" : "not allowed"))")
+        var alertOpen = false
+        let watcher = Timer(timeInterval: 1, repeats: true) { [weak self] t in
+            guard let self, AppInfo.accessibilityAllowed else { return }
+            t.invalidate()
+            self.permissionTimer = nil
+            AppInfo.note("Accessibility permission granted")
+            if alertOpen { NSApp.abortModal() }
+            self.start()
+        }
+        RunLoop.main.add(watcher, forMode: .common)
+        permissionTimer = watcher
+
+        alertOpen = true
+        let choice = AppInfo.alert(
+            "mac-i3 needs two permissions",
+            "macOS only lets an app move windows and see keyboard shortcuts after you allow it:\n\n"
+            + "• Accessibility: to move, resize and focus windows\n"
+            + "• Input Monitoring: to react to your key bindings\n\n"
+            + "Click Continue, then turn on “mac-i3” in each list. It starts by itself as soon as access is granted.\n\n"
+            + "If mac-i3 is already in a list (even switched on) from an earlier install, select it and click − to remove it, "
+            + "then quit and reopen mac-i3. macOS ties the permission to the exact build.",
+            buttons: ["Continue", "Quit"])
+        alertOpen = false
+        if choice == 1 { exit(0) }
+        if choice == 0 && !started {
+            AppInfo.requestPermissions()
+            AppInfo.openSettings(AppInfo.accessibilityPane)
+        }
+    }
+
+    /// Everything that needs the permissions: the tree, config, key tap, mouse monitor, timers.
+    func start() {
+        guard !started else { return }
+        started = true
         let ov = OverlayController()
         ov.onTabClick = { [weak self] id in
             guard let self else { return }
@@ -93,10 +155,44 @@ public final class WindowManager {
         ipc.handler = { [weak self] req in self?.handleIPC(req) ?? "error" }
 
         keyTap.handler = { [weak self] code, mods, down in self?.handleKey(code, mods, down) ?? false }
-        if !keyTap.start() { FileHandle.standardError.write(Data("mac-i3: could not create key tap (Input Monitoring permission?). Key bindings disabled.\n".utf8)) }
+        if keyTap.start() {
+            bar?.setNeedsPermission(false)
+        } else if AppInfo.isBundled {
+            AppInfo.note("key tap could not start yet (Accessibility \(AppInfo.accessibilityAllowed ? "allowed" : "not allowed"), Input Monitoring \(AppInfo.inputMonitoringAllowed ? "allowed" : "not allowed")); retrying")
+            bar?.setNeedsPermission(true)
+            var waited = 0
+            var told = false
+            let retry = Timer(timeInterval: 2, repeats: true) { [weak self] t in
+                guard let self else { return }
+                if self.keyTap.start() {
+                    t.invalidate()
+                    AppInfo.note("key bindings active")
+                    self.bar?.setNeedsPermission(false)
+                    return
+                }
+                waited += 2
+                // macOS says Input Monitoring is allowed, yet the tap still cannot start: it applies the grant to a
+                // freshly launched process, so relaunch once automatically (never in a loop).
+                if waited >= 6, AppInfo.inputMonitoringAllowed {
+                    if ProcessInfo.processInfo.environment["MAC_I3_RELAUNCHED"] == nil {
+                        AppInfo.note("Input Monitoring is allowed but not applied to this process yet: relaunching once")
+                        setenv("MAC_I3_RELAUNCHED", "1", 1)
+                        self.perform(.restart)
+                    } else if !told {
+                        told = true
+                        AppInfo.note("key tap still failing after a relaunch")
+                        AppInfo.alert("Please quit and reopen mac-i3",
+                                      "macOS has allowed Input Monitoring, but it only takes effect after mac-i3 is opened again. Choose Quit mac-i3 from its menu bar item and open it from Applications.",
+                                      buttons: ["OK"])
+                    }
+                }
+            }
+            RunLoop.main.add(retry, forMode: .common)
+        } else {
+            FileHandle.standardError.write(Data("mac-i3: could not create key tap (Input Monitoring permission?). Key bindings disabled.\n".utf8))
+        }
 
         installMouseMonitor()
-        installSignalHandlers()
         let nc = NSWorkspace.shared.notificationCenter
         for n in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
                   NSWorkspace.didActivateApplicationNotification, NSWorkspace.didHideApplicationNotification,
@@ -112,8 +208,6 @@ public final class WindowManager {
         reconcile()
         for cmd in config.startup { execShell(cmd) }
         log("running; \(tree.allWindowIDs.count) windows managed")
-        app.run()
-        exit(0)
     }
 
     func die(_ msg: String) -> Never {
@@ -138,7 +232,7 @@ public final class WindowManager {
         ipc.stop()
         overlay?.hideAll()
         bar?.remove()
-        restoreOffscreenWindows(quiet: true)
+        if started { restoreOffscreenWindows(quiet: true) }   // nothing was parked if we never started managing
         exit(0)
     }
 
@@ -173,23 +267,33 @@ public final class WindowManager {
     // MARK: - Workspace bar
 
     func configureBar() {
-        if bar == nil {
-            let b = WorkspaceBarController()
-            // Clicks on the bar are mouse actions: apply them directly, so `mouse_warping` does not move the cursor.
-            b.onSwitch = { [weak self] name in
-                guard let self else { return }
-                self.tree.switchWorkspace(name)
-                self.applyLayout()
-            }
-            b.onFocusWindow = { [weak self] id in
-                guard let self else { return }
-                self.tree.focusWindow(id)
-                self.applyLayout()
-            }
-            bar = b
-        }
-        bar?.configure(enabled: config.workspaceBar, icons: config.workspaceBarIcons, layout: config.workspaceBarLayout)
+        let b = ensureBar()
+        b.configure(enabled: config.workspaceBar, icons: config.workspaceBarIcons, layout: config.workspaceBarLayout,
+                    glyphWhenDisabled: AppInfo.isBundled)
         updateBar()
+    }
+
+    /// The menu bar item; created early so it can also show "needs permission" before the daemon starts.
+    @discardableResult
+    func ensureBar() -> WorkspaceBarController {
+        if let bar { return bar }
+        let b = WorkspaceBarController()
+        // Clicks on the bar are mouse actions: apply them directly, so `mouse_warping` does not move the cursor.
+        b.onSwitch = { [weak self] name in
+            guard let self else { return }
+            self.tree.switchWorkspace(name)
+            self.applyLayout()
+        }
+        b.onFocusWindow = { [weak self] id in
+            guard let self else { return }
+            self.tree.focusWindow(id)
+            self.applyLayout()
+        }
+        b.actions = AppActions(reload: { [weak self] in _ = self?.execute("reload") },
+                               restart: { [weak self] in self?.perform(.restart) },
+                               quit: { [weak self] in self?.shutdown() })
+        bar = b
+        return b
     }
 
     func updateBar() {

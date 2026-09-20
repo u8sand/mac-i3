@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 mac-i3 contributors
+
 """End-to-end tests for mac-i3.
 
 Starts the daemon scoped to its own test windows (`--only mac-i3`, so nothing else on your desktop is

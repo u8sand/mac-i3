@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 mac-i3 contributors
+
 import AppKit
 
 /// `mac-i3 test-window <title>`: a plain window with a big label, used by the integration tests
