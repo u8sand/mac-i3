@@ -34,6 +34,8 @@ public struct Config {
     public var innerGap = 0.0
     public var outerGap = 0.0
     public var focusWrapping = true
+    /// Drag to resize / move tiled windows (`mouse_gestures no` turns it off).
+    public var mouseGestures = true
     public var startup: [String] = []
     public var forWindow: [WindowRule] = []
     public var assign: [WindowRule] = []
