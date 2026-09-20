@@ -424,29 +424,19 @@ public final class WindowManager {
     // MARK: - Rules (for_window / assign, subset)
 
     func applyRules(for f: Found) {
-        for rule in config.forWindow + config.assign where ruleMatches(rule.criteria, f) {
+        for rule in config.forWindow + config.assign where Criteria(rule.criteria).matches(app: f.appName, title: f.title) {
             var cmd = rule.command
             if config.assign.contains(where: { $0.criteria == rule.criteria && $0.command == rule.command }) {
                 cmd = "move container to workspace " + cmd.replacingOccurrences(of: "→", with: "").trimmingCharacters(in: .whitespaces)
             }
             _ = tree.run(cmd)
         }
-        if tree.focusedWindowID != f.id { reclaimFocus = true }
-    }
-
-    func ruleMatches(_ criteria: String, _ f: Found) -> Bool {
-        let body = criteria.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
-        for part in body.split(separator: " ") {
-            let kv = part.split(separator: "=", maxSplits: 1).map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
-            guard kv.count == 2 else { continue }
-            let value = kv[1]
-            switch kv[0] {
-            case "class", "app", "app_name", "instance": if f.appName.caseInsensitiveCompare(value) != .orderedSame { return false }
-            case "title": if !f.title.contains(value) { return false }
-            default: return false
-            }
+        // A rule that floats a window leaves it where the app put it (a key-press toggle would instead
+        // shrink it), so `for_window [class=".*"] floating enable` does not pile everything up.
+        if !f.floating, let frame = f.frame, tree.find(f.id)?.isFloating == true {
+            tree.floatingFrameChanged(f.id, frame)
         }
-        return true
+        if tree.focusedWindowID != f.id { reclaimFocus = true }
     }
 
     // MARK: - Applying the layout
@@ -514,16 +504,18 @@ public final class WindowManager {
     /// Pull every window that is entirely off all displays back onto the primary display.
     @discardableResult
     public func restoreOffscreenWindows(quiet: Bool) -> Int {
-        WindowManager.restoreOffscreen(quiet: quiet)
+        // Only rescue windows this daemon could have parked (respects --only/--exclude), so a scoped
+        // instance never disturbs windows parked by another one.
+        WindowManager.restoreOffscreen(quiet: quiet, appFilter: { [self] in matches($0) })
     }
 
     @discardableResult
-    public static func restoreOffscreen(quiet: Bool) -> Int {
+    public static func restoreOffscreen(quiet: Bool, appFilter: (NSRunningApplication) -> Bool = { _ in true }) -> Int {
         let screens = Displays.fullFrames()
         guard let main = Displays.outputs().first?.rect else { return 0 }
         var moved = 0
         var n = 0.0
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != getpid() {
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != getpid() && appFilter(app) {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
             AXUIElementSetMessagingTimeout(axApp, 0.5)
             guard let list = AX.attr(axApp, kAXWindowsAttribute) as? [AXUIElement] else { continue }

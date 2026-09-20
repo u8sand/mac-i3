@@ -59,8 +59,27 @@ in i3. Clicking a tab in a title bar focuses that window; clicking a window focu
 
 `~/.config/mac-i3/config` uses i3 syntax (`mac-i3 default-config` prints the built-in one):
 `set`, `bindsym` (incl. `--release`), `mode "name" { ... }`, `exec`, `gaps inner|outer N`,
-`focus_wrapping`, `for_window [title="..."|app="..."] <command>`, `assign [...] → <workspace>`.
+`focus_wrapping`, `for_window`, `assign` (see below).
 Keys are physical (layout independent).
+
+### Window rules
+
+`for_window [criteria] <command>` runs an i3 command on every new window; `assign [criteria] → <workspace>`
+sends it to a workspace. Criteria values are **regular expressions matched anywhere** in the property
+(case-insensitive here; anchor with `^…$` for an exact match). `class`, `instance`, `app` and `app_name`
+all mean the application's name; `title` is the window title; several terms must all match; `[]` matches
+everything. Rules run in file order, so a later rule can undo an earlier one.
+
+```
+# float everything by default (windows keep the position and size the app gave them)...
+for_window [class=".*"] floating enable
+# ...except these, which tile
+for_window [app="^(Terminal|iTerm2)$"] floating disable
+```
+
+With this, `$mod+Shift+Space` floats or tiles the focused window on demand. Note that
+`focus left/right/up/down` only navigates between *tiled* windows; floating windows are reached with the
+mouse or `$mod+Space` (`focus mode_toggle`), and `move <dir>` nudges them by 10px.
 
 ### Modifier keys
 
@@ -131,7 +150,9 @@ The integration suite starts a scoped daemon, opens labelled windows, **injects 
 asserts on the frames and focus that macOS reports through the Accessibility API (tiling, splits,
 focus/move, workspaces, tabbed/stacked, kill, resize mode, floating, fullscreen, multi-monitor, rules,
 restart, crash recovery, and real Terminal.app windows — skipped if Terminal is already running).
-Needs no other window manager running.
+It needs no other window manager running, and **refuses to start while another `mac-i3` daemon is running**
+(e.g. the one you use day to day). It talks to its daemons over a private socket (`MAC_I3_SOCKET`), so it never
+touches a real daemon's `~/.config/mac-i3/ipc.sock`.
 
 ## Known limitations
 
