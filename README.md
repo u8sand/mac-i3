@@ -4,12 +4,15 @@
 
 **[github.com/u8sand/mac-i3](https://github.com/u8sand/mac-i3)** · [Releases](https://github.com/u8sand/mac-i3/releases) · GPL-3.0-or-later
 
-i3 window management for macOS, as a single CLI. Run `mac-i3`, and it listens for key bindings (Option-based
-by default) and tiles, focuses and moves your windows the way i3 does.
+i3 window management for macOS, as a single CLI. Run `mac-i3`, and it listens for key bindings (Option-based by default) and tiles, focuses and moves your windows the way i3 does.
 
-It implements i3's real container tree (arbitrary nesting, per-container layouts, `focus parent`,
-focus stacks, `split`, tabbed/stacked with title bars, floating, fullscreen, workspaces, multiple
-outputs), rather than a simplified grid.
+It implements i3's real container tree (arbitrary nesting, per-container layouts, `focus parent`, focus stacks, `split`, tabbed/stacked with title bars, floating, fullscreen, workspaces, multiple outputs), rather than a simplified grid. Configuration management is a subset of the i3wm config.
+
+I tried to like [AeroSpace](https://github.com/nikitabobko/AeroSpace) which is definitely more mature than this, but it just didn't work like the [i3wm](https://i3wm.org/) I'm used to on linux. I vibe-coded this project in an afternoon with [Claude Code](https://claude.com/product/claude-code) focusing on the features of i3wm I actually use and making it integrate on mac. I'm liking how it works way better, hope anyone else looking for something similar finds it useful.
+
+## Screenshot
+
+<img width="1800" height="1168" alt="image" src="https://github.com/user-attachments/assets/4a8fbd46-3eee-4756-8d7c-56b8d8351087" />
 
 ## Install (the app)
 
@@ -317,13 +320,10 @@ were left held down system-wide.
 
 ## Known limitations
 
-* Windows on other native macOS Spaces are invisible to the Accessibility API: stay on one Space and
-  use i3 workspaces instead.
-* Apps that snap or enforce minimum sizes (Terminal snaps to its character grid) may end a few pixels
-  off their tile.
+* Windows on other native macOS Spaces are invisible to the Accessibility API: stay on one Space and use i3 workspaces instead.
+* Apps that snap or enforce minimum sizes (Terminal snaps to its character grid) may end a few pixels off their tile.
 * Option+key chords that are bound are swallowed, so apps that use Option as Meta lose those chords.
 * `restart` re-reads all windows; the layout tree is rebuilt (windows are re-tiled in creation order).
-* Multi-display: workspace-per-output works; hot-plugging is handled, but is less tested than the rest.
 
 ## License
 
