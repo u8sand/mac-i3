@@ -201,3 +201,12 @@ import Testing
         #expect(ConfigParser.parse("workspace_bar_layout nested").errors.count == 1)
     }
 }
+
+@Suite struct LayoutPersistenceOption {
+    @Test func defaultsOnAndCanBeTurnedOff() {
+        #expect(ConfigParser.parse("").config.layoutPersistence)
+        #expect(ConfigParser.parse("layout_persistence yes").config.layoutPersistence)
+        #expect(!ConfigParser.parse("layout_persistence no").config.layoutPersistence)
+        #expect(!ConfigParser.parse("layout_persistence off").config.layoutPersistence)
+    }
+}

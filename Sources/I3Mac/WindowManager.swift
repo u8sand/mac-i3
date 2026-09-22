@@ -234,9 +234,46 @@ public final class WindowManager {
         Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.bar?.verifyPresence() }
 
         restoreOffscreenWindows(quiet: true)   // recover from a previous crash
-        reconcile()
+        let restore = attemptRestore()
+        reconcile(prefetched: restore.map { ($0.found, $0.unavailable) }, forceApply: (restore?.restored ?? 0) > 0)
         for cmd in config.startup { execShell(cmd) }
         log("running; \(tree.allWindowIDs.count) windows managed")
+    }
+
+    // MARK: - Layout persistence
+
+    /// One-shot: reconstructs the tree from the last saved snapshot before the very first `reconcile()`,
+    /// so windows that already existed land back in their saved splits/tabs/stacks instead of getting
+    /// tiled in fresh. Windows the snapshot does not account for are simply left for `reconcile()` to add
+    /// in the usual way, right after this returns.
+    /// Returns the enumeration it had to do anyway (to match the snapshot against what is actually running),
+    /// so the caller's first `reconcile()` can reuse it instead of paying for a second full AX pass over every
+    /// app — otherwise the bar sits on its startup placeholder for twice as long after every `restart`.
+    @discardableResult
+    func attemptRestore() -> (found: [Found], unavailable: Set<pid_t>, restored: Int)? {
+        guard config.layoutPersistence,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: AppInfo.statePath)),
+              let snapshot = try? JSONDecoder().decode(TreeSnapshot.self, from: data) else { return nil }
+        let result = enumerate()
+        for f in result.found { wins[f.id] = Win(element: f.element, pid: f.pid) }
+        let live = result.found.map { LiveWindow(id: $0.id, appName: $0.appName, title: $0.title) }
+        let (restored, dropped) = tree.restore(from: snapshot, live: live)
+        if restored > 0 {
+            log("restored \(restored) window(s) from the saved layout" + (dropped > 0 ? " (\(dropped) no longer present)" : ""))
+        }
+        return (result.found, result.unavailable, restored)
+    }
+
+    /// Writes the current tree to disk, so the next `restart` (or a relaunch after a crash) can restore it.
+    func saveSnapshot() {
+        guard config.layoutPersistence else { return }
+        let snap = tree.snapshot { [wins] id in
+            wins[id].flatMap { NSRunningApplication(processIdentifier: $0.pid)?.localizedName }
+        }
+        guard let data = try? JSONEncoder().encode(snap) else { return }
+        let path = AppInfo.statePath
+        try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
     func die(_ msg: String) -> Never {
@@ -376,10 +413,21 @@ public final class WindowManager {
         case .restart:
             keyTap.stop(); ipc.stop()
             restoreOffscreenWindows(quiet: true)
+            bar?.remove()
+            // A genuinely new process, not execv(): execv keeps this process's PID but does not reset its
+            // existing Mach-level connections to WindowServer, and NSStatusBar was observed (reproducibly)
+            // to come back permanently broken in the same process after it — no amount of tearing down and
+            // recreating the status item fixed it. A fresh child process never inherits that state.
             let exe = Bundle.main.executablePath ?? CommandLine.arguments[0]
-            var args = CommandLine.arguments.map { strdup($0) } + [nil]
-            execv(exe, &args)
-            die("restart failed")
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: exe)
+            p.arguments = Array(CommandLine.arguments.dropFirst())
+            do {
+                try p.run()
+                exit(0)
+            } catch {
+                die("restart failed: \(error)")
+            }
         case .exit:
             shutdown()
         }
@@ -565,7 +613,10 @@ public final class WindowManager {
 
     // MARK: - Reconcile OS state into the tree
 
-    func reconcile() {
+    /// `forceApply`: a restored snapshot changed the tree's structure without the OS-facing signals below ever
+    /// seeing a window added, removed or moved — nothing here would otherwise set `changed`, so the restored
+    /// layout (and the bar) would never actually get pushed out until something unrelated forced an `applyLayout()`.
+    func reconcile(prefetched: (found: [Found], unavailable: Set<pid_t>)? = nil, forceApply: Bool = false) {
         // A gap much larger than the 0.4s timer cadence is circumstantial evidence of a suspend we may not have
         // received (or not yet processed) a notification for — guard defensively, the same as an explicit one.
         let now = Date()
@@ -579,7 +630,7 @@ public final class WindowManager {
         // of its windows are gone — but a single reading of this list is not enough to act on (see below).
         let alivePids = Set(NSWorkspace.shared.runningApplications.map { $0.processIdentifier })
         pruneObservers(alivePids)
-        var changed = false
+        var changed = forceApply
 
         let outs = Displays.outputs()
         let desc = describeOutputs(outs)
@@ -595,7 +646,7 @@ public final class WindowManager {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in self?.bar?.verifyPresence() }
         }
 
-        let (found, unavailableApps) = enumerate()
+        let (found, unavailableApps) = prefetched ?? enumerate()
         let foundIDs = Set(found.map { $0.id })
         for id in foundIDs { missingSince[id] = nil }
         for id in foundIDs where wins[id].map({ alivePids.contains($0.pid) }) ?? true { ownerMissingSince[id] = nil }
@@ -743,6 +794,7 @@ public final class WindowManager {
         pushFocus(res)
         warpAfterWindowClosed(layout: res)
         updateBar()
+        saveSnapshot()
         return res
     }
 

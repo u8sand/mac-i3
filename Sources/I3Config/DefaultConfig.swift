@@ -148,6 +148,10 @@ public enum DefaultConfig {
     #
     # Wrap around at the edge of a container when moving focus.
     # focus_wrapping yes
+    #
+    # Remember your splits, tabs and stacks (~/.config/mac-i3/state.json) so `restart` (Control+Option+R
+    # in the default bindings) restores them instead of re-tiling every window into a plain row.
+    # layout_persistence yes
     """
 
     /// i3's own stock key bindings (home-row focus, resize mode...), with Option as $mod.

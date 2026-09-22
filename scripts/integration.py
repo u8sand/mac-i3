@@ -28,6 +28,8 @@ TOL = 3
 # Synthetic presses are only allowed on test windows: a mistake must never grab one of your own windows.
 os.environ["MAC_I3_MOUSE_GUARD"] = "mac-i3"
 os.environ["MAC_I3_SOCKET"] = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}.sock")
+# A private saved-layout file too: tests must never read or overwrite a real one.
+os.environ["MAC_I3_STATE"] = os.path.join(tempfile.gettempdir(), f"mac-i3-test-{os.getpid()}-state.json")
 
 
 def run(*args, timeout=10, env=None):
@@ -41,6 +43,7 @@ class Daemon:
         self.only = only
         self.procs = {}
         self.proc = None
+        self._extra_pid = None   # set by restart(): a child process self.proc did not spawn directly
 
     def start(self, clean=True):
         if clean:
@@ -65,7 +68,40 @@ class Daemon:
                 self.proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        if self._extra_pid is not None:
+            # `restart()` replaced the original process with a new one of its own (not execv, so a new
+            # PID): "msg exit" above reached whichever process currently owns the socket, but make sure.
+            try:
+                os.kill(self._extra_pid, 9)
+            except ProcessLookupError:
+                pass
+            self._extra_pid = None
         cleanup_leftovers()
+
+    def restart(self):
+        """`restart` (Control+Option+R by default): the daemon replaces itself with a new process (not
+        execv, so a new PID -- see WindowManager.swift). Re-finds that new PID afterwards so `stop()` can
+        still clean it up; `self.proc`'s own stderr pipe keeps capturing the new process's log lines too,
+        since it inherits the same file descriptor."""
+        old_pid = self.proc.pid if self.proc else None
+        run("msg", "restart")   # the process exits mid-command to make way for its replacement: never answers
+        new_pid = None
+        for _ in range(50):
+            out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                pid_s, _, cmd = line.strip().partition(" ")
+                if not pid_s.isdigit() or int(pid_s) == old_pid:
+                    continue
+                argv = cmd.split()
+                if argv and os.path.basename(argv[0]) == os.path.basename(BIN) and "run" in argv:
+                    new_pid = int(pid_s)
+                    break
+            if new_pid is not None and run("ping").stdout.strip() == "pong":
+                break
+            time.sleep(0.1)
+        assert new_pid is not None, "could not find the daemon's replacement process after restart"
+        self._extra_pid = new_pid
+        _ours.add(new_pid)
 
     # -- driving ----------------------------------------------------------------------------
     def state(self, retry=False):
@@ -203,10 +239,11 @@ def cleanup_leftovers():
             pass
         _ours.discard(pid)
     time.sleep(0.3)
-    try:
-        os.unlink(os.environ["MAC_I3_SOCKET"])
-    except FileNotFoundError:
-        pass
+    for path in (os.environ["MAC_I3_SOCKET"], os.environ["MAC_I3_STATE"]):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
 
 # ------------------------------------------------------------------------------------------------
@@ -366,13 +403,61 @@ def s_restart_keeps_managing(d):
     """Option+Shift+r re-executes the daemon; windows are picked up and tiled again."""
     O = d.output()
     d.spawn("A"); d.spawn("B")
-    run("msg", "restart")
+    d.restart()
     d.wait(lambda s: len(s["windows"]) == 2, "daemon to come back after restart", timeout=8)
     d.settle(0.8)
     d.expect_frame("A", (O["x"], O["y"], O["w"] / 2, O["h"]), "after restart: ")
     d.expect_frame("B", (O["x"] + O["w"] / 2, O["y"], O["w"] / 2, O["h"]))
     d.key("Mod1+3")                                                  # key bindings work again
     assert d.is_parked("A")
+
+
+def s_layout_persistence(d):
+    """A restart (or a crash) restores the saved container tree instead of flattening it: nested splits,
+    tabbed groups and focus all survive, by real window ID -- the windows never close, only the daemon
+    managing them does. Checked structurally (the tree shape) and by output membership (rather than exact
+    pre-restart pixels: a restart also reapplies the layout, so a window that was on-screen in the wrong
+    place before restart -- a separate, known two-monitor placement issue -- is expected to move, onto the
+    output its restored tree position actually says it belongs to)."""
+    d.spawn("A"); d.spawn("B"); d.spawn("C")
+    d.key("Mod1+v"); d.spawn("D")                                    # H[A B V[C D*]]
+    d.key("Mod1+w")                                                  # V[C D] becomes tabbed: H[A B T[C D*]]
+    before = d.state()["shape"]
+    before_focus_id = d.state()["osFocus"]
+    assert "T[" in before[0], before
+
+    d.restart()
+    d.wait(lambda s: len(s["windows"]) == 4, "daemon to come back after restart", timeout=8)
+    d.settle(0.8)
+    after = d.state()["shape"]
+    assert after == before, f"layout not preserved across restart:\n  before: {before}\n  after:  {after}"
+    assert d.state()["osFocus"] == before_focus_id, "focus should also survive the restart"
+    O = d.output()
+    for t in "AB":
+        x, y, w, h = d.frame(t)
+        assert O["x"] <= x < O["x"] + O["w"] and O["y"] <= y < O["y"] + O["h"], \
+            f"{t}'s frame after restart should land on its assigned output {O}: got {(x, y, w, h)}"
+
+    d.key("Mod1+j")                                                  # the tabbed group is still interactive: cycle its tabs
+    d.expect_focus("C")
+s_layout_persistence.config = "layout_persistence yes\n"
+
+
+def s_layout_persistence_survives_a_closed_window(d):
+    """If a window closes while mac-i3 is restarting, the saved layout degrades gracefully: the other two
+    windows are still there in their same container structure, and the one that was closed is just gone --
+    its container survives as a single-child container, the same as if you had closed it normally, live."""
+    d.spawn("A"); d.spawn("B")
+    d.key("Mod1+v"); d.spawn("C")                                     # H[A V[B C*]]
+
+    d.restart()
+    d.wait(lambda s: len(s["windows"]) == 3, "daemon to come back", timeout=8)
+    d.procs["C"].terminate()                                          # C closes in the gap right after restart
+    d.wait(lambda s: len(s["windows"]) == 2, "C to be noticed as gone", timeout=6)
+    d.settle(0.5)
+    assert d.win("A") and d.win("B")
+    assert "V[" in d.state()["shape"][0], f"B's single-child container should survive: {d.state()['shape']}"
+s_layout_persistence_survives_a_closed_window.config = "layout_persistence yes\n"
 
 
 def s_crash_restore(d):
@@ -383,8 +468,11 @@ def s_crash_restore(d):
     assert d.is_parked("A") and d.is_parked("B")
     d.proc.kill(); d.proc.wait()
     time.sleep(0.4)
+    # `restore` is deliberately system-wide (a crashed daemon may have parked windows the next one does not
+    # even know about), so it may also rescue other, unrelated off-screen windows on a machine with a
+    # longer history -- only our own two are asserted on here.
     out = run("restore").stdout
-    assert "restored 2" in out, f"restore said: {out!r}"
+    assert "restored mac-i3: A" in out and "restored mac-i3: B" in out, f"restore said: {out!r}"
     d.start(clean=False)                                             # new daemon adopts the rescued windows
     d.wait(lambda s: len(s["windows"]) == 2, "windows to be re-adopted")
     d.settle(0.8)

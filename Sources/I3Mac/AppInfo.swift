@@ -25,6 +25,14 @@ public enum AppInfo {
 
     public static var configPath: String { NSString(string: "~/.config/mac-i3/config").expandingTildeInPath }
     public static var logPath: String { NSString(string: "~/Library/Logs/mac-i3.log").expandingTildeInPath }
+    /// The saved container tree (`layout_persistence`), read back once at startup so a `restart` does not
+    /// flatten your splits, tabs and stacks. `MAC_I3_STATE` overrides the location, the same way
+    /// `MAC_I3_SOCKET` overrides the IPC socket — the integration tests use it so they can never read or
+    /// overwrite a real saved layout.
+    public static var statePath: String {
+        if let custom = ProcessInfo.processInfo.environment["MAC_I3_STATE"], !custom.isEmpty { return custom }
+        return NSString(string: "~/.config/mac-i3/state.json").expandingTildeInPath
+    }
 
     /// Launched from Finder there is no terminal to print to, so send stderr (config errors, warnings) to a log
     /// file. A terminal-launched run keeps its stderr, and the log is trimmed once it grows large.

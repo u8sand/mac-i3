@@ -51,6 +51,9 @@ public struct Config {
     public var workspaceOutputs: [String: [String]] = [:]
     /// Dropping a dragged window on the middle of another swaps them (default: joins that window's group).
     public var mouseDropCenterSwaps = false
+    /// Save the container tree after every change, and restore it at startup, so a `restart` (or recovering
+    /// from a crash) does not flatten your splits, tabs and stacks back to a plain row.
+    public var layoutPersistence = true
     public var startup: [String] = []
     public var forWindow: [WindowRule] = []
     public var assign: [WindowRule] = []
