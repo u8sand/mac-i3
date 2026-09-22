@@ -52,8 +52,20 @@ public final class WindowManager {
     /// Set when a command (closing a window) will move focus a moment later: the cursor should follow then.
     var warpUntil = Date.distantPast
     var warpAway: WindowID?
-    /// Consecutive passes in which a known window was not listed (see `reconcile`).
-    var missing: [WindowID: Int] = [:]
+    /// When a known window was first not listed (see `reconcile`); cleared once it is seen again.
+    var missingSince: [WindowID: Date] = [:]
+    /// When a known window's owning process was first observed missing from `NSWorkspace.runningApplications`;
+    /// cleared the moment that process is seen alive again (see `reconcile`).
+    var ownerMissingSince: [WindowID: Date] = [:]
+    /// While `Date() < sleepGuardUntil`, no window is ever removed, regardless of what any AX call reports.
+    /// Observed on real hardware: as the system begins to sleep, `AXUIElementCopyAttributeValue` returns
+    /// `.invalidUIElement` for *every* window at once — the display/WindowServer connection tearing down, not
+    /// the windows actually closing — which briefly makes every "is this really gone?" signal this file relies
+    /// on lie at the same time. Nothing computed from AX can be trusted to tell that moment apart from a real
+    /// closure, so this guard uses the one authoritative, non-AX source instead: the OS's own sleep/wake
+    /// notifications (plus a large gap between reconcile ticks, in case a notification is ever missed).
+    var sleepGuardUntil = Date.distantPast
+    var lastReconcileAt = Date()
     var gesture: Gesture?
     /// Frame verification pauses while the mouse is in use, so it cannot undo a drag before it is read.
     var lastMouseActivity = Date.distantPast
@@ -202,7 +214,24 @@ public final class WindowManager {
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             self?.requestReconcile()
         }
+        nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            AppInfo.note("system is going to sleep: no window will be removed until well after it wakes")
+            self.sleepGuardUntil = .distantFuture
+        }
+        nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            AppInfo.note("system woke up; giving every window a fresh grace period before reconciling")
+            self.missingSince.removeAll()
+            self.ownerMissingSince.removeAll()
+            self.sleepGuardUntil = Date().addingTimeInterval(4)   // AX/WindowServer needs a moment to settle
+            self.lastReconcileAt = Date()
+            self.requestReconcile()
+        }
         Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in self?.reconcile() }
+        // A general safety net, independent of the display-change hook above: covers any other way the item
+        // could end up missing that a display reconfiguration is not the trigger for.
+        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.bar?.verifyPresence() }
 
         restoreOffscreenWindows(quiet: true)   // recover from a previous crash
         reconcile()
@@ -292,6 +321,7 @@ public final class WindowManager {
         b.actions = AppActions(reload: { [weak self] in _ = self?.execute("reload") },
                                restart: { [weak self] in self?.perform(.restart) },
                                quit: { [weak self] in self?.shutdown() })
+        b.onDiagnostic = { [weak self] msg in AppInfo.note("workspace bar: \(msg)") }
         bar = b
         return b
     }
@@ -387,6 +417,25 @@ public final class WindowManager {
         case "reconcile":
             reconcile()
             return "ok"
+        case "debug-simulate-sleep":
+            // Test-only: exercises the exact same guard the real willSleep/didWake notifications set, without
+            // needing an actual system suspend. Never reachable except by deliberately sending this over IPC.
+            sleepGuardUntil = .distantFuture
+            return "ok"
+        case "debug-simulate-wake":
+            missingSince.removeAll()
+            ownerMissingSince.removeAll()
+            sleepGuardUntil = Date().addingTimeInterval(4)
+            lastReconcileAt = Date()
+            return "ok"
+        case "debug-break-bar":
+            // Test-only: reproduces "macOS silently dropped the status item" without needing a real display
+            // change, by pulling the item out from under our own bookkeeping's feet.
+            bar?.debugBreak()
+            return "ok"
+        case "debug-verify-bar":
+            bar?.verifyPresence()
+            return "ok"
         case "shape":
             return tree.outputs.map { o in tree.currentWorkspace(of: o) }.map { "\($0.name): \(tree.shape($0))" }.joined(separator: "\n")
         default:
@@ -447,8 +496,11 @@ public final class WindowManager {
         let appName: String
     }
 
-    func enumerate() -> [Found] {
+    /// `unavailable`: pids whose window list could not be retrieved this pass (app busy, suspended, or still
+    /// waking from sleep) — the caller must not treat any of their previously known windows as removed.
+    func enumerate() -> (found: [Found], unavailable: Set<pid_t>) {
         var out: [Found] = []
+        var unavailable: Set<pid_t> = []
         for app in NSWorkspace.shared.runningApplications
         where app.activationPolicy == .regular && app.processIdentifier != myPid && !app.isTerminated && !app.isHidden && matches(app) {
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
@@ -456,6 +508,7 @@ public final class WindowManager {
             ensureObserver(app, axApp)
             guard let list = AX.attr(axApp, kAXWindowsAttribute) as? [AXUIElement] else {
                 log("AX window list unavailable for \(app.localizedName ?? "?") (pid \(app.processIdentifier))")
+                unavailable.insert(app.processIdentifier)
                 continue
             }
             for w in list {
@@ -470,13 +523,14 @@ public final class WindowManager {
                 case kAXDialogSubrole, kAXFloatingWindowSubrole, kAXSystemDialogSubrole: floating = true
                 default: continue
                 }
+                AX.boundMessaging(w)   // never let a later call through this cached reference hang the daemon
                 if let f = AX.frame(w), f.w < 60 || f.h < 40 { continue }
                 out.append(Found(id: id, element: w, pid: app.processIdentifier,
                                  title: AX.string(w, kAXTitleAttribute) ?? "", floating: floating,
                                  frame: AX.frame(w), appName: app.localizedName ?? ""))
             }
         }
-        return out
+        return (out, unavailable)
     }
 
     // MARK: - Observers
@@ -496,8 +550,7 @@ public final class WindowManager {
         observers[pid] = o
     }
 
-    func pruneObservers() {
-        let alive = Set(NSWorkspace.shared.runningApplications.map { $0.processIdentifier })
+    func pruneObservers(_ alive: Set<pid_t>) {
         for pid in observers.keys where !alive.contains(pid) { observers[pid] = nil }
     }
 
@@ -513,31 +566,72 @@ public final class WindowManager {
     // MARK: - Reconcile OS state into the tree
 
     func reconcile() {
-        pruneObservers()
+        // A gap much larger than the 0.4s timer cadence is circumstantial evidence of a suspend we may not have
+        // received (or not yet processed) a notification for — guard defensively, the same as an explicit one.
+        let now = Date()
+        if now.timeIntervalSince(lastReconcileAt) > 2, sleepGuardUntil < now.addingTimeInterval(4) {
+            AppInfo.note("reconcile was delayed \(Int(now.timeIntervalSince(lastReconcileAt)))s — likely a suspend; guarding removals defensively")
+            sleepGuardUntil = now.addingTimeInterval(4)
+        }
+        lastReconcileAt = now
+
+        // A pid missing here usually means its whole process has exited — the fastest available signal that any
+        // of its windows are gone — but a single reading of this list is not enough to act on (see below).
+        let alivePids = Set(NSWorkspace.shared.runningApplications.map { $0.processIdentifier })
+        pruneObservers(alivePids)
         var changed = false
 
         let outs = Displays.outputs()
         let desc = describeOutputs(outs)
         if desc != lastOutputs {
+            AppInfo.note("displays changed: \(lastOutputs) -> \(desc)")
             lastOutputs = desc
             tree.updateOutputs(outs, labels: Displays.labels(), primary: Displays.primaryName())
             applied.removeAll()
             changed = true
+            // The status item is anchored to a particular screen's menu bar; give macOS a moment to finish
+            // laying that out after the reconfiguration before checking whether ours survived it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.bar?.verifyPresence() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in self?.bar?.verifyPresence() }
         }
 
-        let found = enumerate()
+        let (found, unavailableApps) = enumerate()
         let foundIDs = Set(found.map { $0.id })
-        for id in foundIDs { missing[id] = nil }
+        for id in foundIDs { missingSince[id] = nil }
+        for id in foundIDs where wins[id].map({ alivePids.contains($0.pid) }) ?? true { ownerMissingSince[id] = nil }
         for id in tree.allWindowIDs where !foundIDs.contains(id) {
-            // A window that is merely unlisted for a moment (its app is busy, e.g. mid-drag) stays; one whose
-            // element is dead, or that stays unlisted for a second pass, is really gone.
-            missing[id, default: 0] += 1
-            if missing[id]! < 2, let w = wins[id], AX.exists(w.element) {
-                log("? window \(id) not listed; keeping it for now")
+            // Mid-sleep, or shortly after waking: every AX signal below is suspect (see `sleepGuardUntil`), so no
+            // verdict is reached at all this pass — not even the generous grace period is allowed to expire.
+            if Date() < sleepGuardUntil { missingSince[id] = nil; continue }
+            // Its app could not even list its windows this pass (busy, suspended, or still waking from sleep):
+            // we have no information at all about this window, so it is left exactly as it is.
+            if let pid = wins[id]?.pid, unavailableApps.contains(pid) { continue }
+            // A confirmed-dead element (the app answered, and this handle is definitively invalid) is removed
+            // right away. Anything less certain — the app is merely slow to answer about this one window — gets
+            // a generous, wall-clock grace period (not a pass count, so it is immune to any timing jitter),
+            // comfortably covering a real sleep/wake cycle, before we give up and remove it anyway.
+            let firstMissed = missingSince[id] ?? Date()
+            missingSince[id] = firstMissed
+            let w = wins[id]
+            // Two independent "confirmed gone" signals, each trusted only once it is not just a single momentary
+            // reading (observed, in a real sleep/wake cycle, to happen: `NSWorkspace.runningApplications`
+            // transiently omitted a process that had never actually exited):
+            //  - the owning process is missing from NSWorkspace.runningApplications, persistently, not just once;
+            //  - the cached AX element reports itself definitely invalid (rare in practice — once a whole process
+            //    has exited, calls through its old elements tend to just fail some other way — but trusted at once
+            //    on the odd occasion it does happen, since it is unambiguous).
+            let ownerMissingNow = w.map { !alivePids.contains($0.pid) } ?? true
+            if ownerMissingNow { ownerMissingSince[id] = ownerMissingSince[id] ?? Date() } else { ownerMissingSince[id] = nil }
+            let ownerConfirmedGone = ownerMissingSince[id].map { Date().timeIntervalSince($0) >= 0.9 } ?? false
+            let elementConfirmedGone = w.map { !AX.exists($0.element) } ?? true
+            let goneForSure = ownerConfirmedGone || elementConfirmedGone
+            if !goneForSure, Date().timeIntervalSince(firstMissed) < 5 {
+                log("? window \(id) not listed (ownerMissingNow=\(ownerMissingNow) elementConfirmedGone=\(elementConfirmedGone)); keeping it for now")
                 continue
             }
-            log("- window \(id) \"\(tree.find(id)?.title ?? "")\" gone")
-            missing[id] = nil
+            log("- window \(id) \"\(tree.find(id)?.title ?? "")\" gone (ownerConfirmedGone=\(ownerConfirmedGone) elementConfirmedGone=\(elementConfirmedGone) waited=\(Date().timeIntervalSince(firstMissed))s)")
+            missingSince[id] = nil
+            ownerMissingSince[id] = nil
             tree.removeWindow(id)
             wins[id] = nil; applied[id] = nil; retries[id] = nil; parked.remove(id)
             changed = true

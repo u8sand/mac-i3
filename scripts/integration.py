@@ -754,6 +754,24 @@ def s_workspace_bar_off(d):
     assert _bar()["enabled"] is False
 
 
+def s_workspace_bar_self_heal(d):
+    """If macOS drops the status item (observed around display reconfiguration; simulated here via a
+    debug hook, since neither a real display swap nor a real sleep reproduced it directly), mac-i3 notices
+    and rebuilds it within a couple of checks -- both via an explicit verify call and via a real display
+    change's own automatic follow-up checks."""
+    assert _bar()["visible"] is True
+    assert run("msg", "debug-break-bar").stdout.strip() == "ok"
+    d.settle(0.3)
+    assert _bar()["visible"] is False, "the break should be detected as not visible"
+    assert run("msg", "debug-verify-bar").stdout.strip() == "ok"
+    d.settle(0.3)
+    assert _bar()["visible"] is False, "a single bad reading must not trigger a rebuild (avoids thrashing mid-transition)"
+    assert run("msg", "debug-verify-bar").stdout.strip() == "ok"
+    d.settle(0.5)
+    assert _bar()["visible"] is True, "two consecutive bad readings should trigger a rebuild"
+s_workspace_bar_self_heal.config = "workspace_bar yes\n"
+
+
 def s_workspace_bar_layout(d):
     """The bar reports each workspace's containers in i3 notation: a layout letter then [children], windows by app name."""
     d.spawn("A"); d.spawn("B")

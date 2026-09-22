@@ -42,7 +42,7 @@ if args.first == sub { args.removeFirst() }
 func fail(_ s: String) -> Never { FileHandle.standardError.write(Data((s + "\n").utf8)); exit(1) }
 
 func client(_ req: String) -> Never {
-    guard let resp = IPC.send(req) else { fail("mac-i3: daemon is not running (start it with `mac-i3`)") }
+    guard let resp = IPC.send(req) else { fail("mac-i3: no response from the daemon (it may be running but busy, or not running — start it with `mac-i3`)") }
     print(resp)
     exit(resp.hasPrefix("error") ? 1 : 0)
 }

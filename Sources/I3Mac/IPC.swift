@@ -23,8 +23,10 @@ public enum IPC {
         return addr
     }
 
-    /// Send one request to the running daemon. Returns nil if none is listening.
-    public static func send(_ request: String, timeout: Int = 5) -> String? {
+    /// Send one request to the running daemon. Returns nil if none is listening, or if it did not answer
+    /// within `timeout` (a busy reconcile pass — e.g. many apps waking from sleep at once — can occasionally
+    /// take a few seconds; nil lets the caller report that plainly instead of printing a blank response).
+    public static func send(_ request: String, timeout: Int = 8) -> String? {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
@@ -44,7 +46,7 @@ public enum IPC {
             if n <= 0 { break }
             out.append(buf, count: n)
         }
-        return String(data: out, encoding: .utf8)
+        return out.isEmpty ? nil : String(data: out, encoding: .utf8)
     }
 }
 

@@ -65,6 +65,10 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     var onSwitch: ((String) -> Void)?
     var onFocusWindow: ((WindowID) -> Void)?
     var actions = AppActions()
+    /// Called whenever the item is found broken and rebuilt, or a display change is observed, for the daemon's
+    /// own log — the exact circumstances (notch, another item colliding, whatever it turns out to be) can only
+    /// be diagnosed from evidence gathered when it next happens, not guessed at ahead of time.
+    var onDiagnostic: ((String) -> Void)?
     /// True while mac-i3 is waiting for macOS permissions: the item shows the glyph and a "grant access" menu.
     private(set) var needsPermission = false
     private var barEnabled = true
@@ -108,6 +112,50 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
         if let item { NSStatusBar.system.removeStatusItem(item) }
         item = nil
         view = nil
+    }
+
+    /// Test-only: simulates macOS dropping the item on its own — removes the real status item but leaves our
+    /// own `item`/`view` references pointing at the now-defunct objects, exactly as a silent OS-side drop would.
+    func debugBreak() {
+        guard let item else { return }
+        NSStatusBar.system.removeStatusItem(item)
+    }
+
+    // MARK: - Self-healing
+
+    /// Consecutive `verifyPresence()` calls that found the item missing/invisible when it should not be.
+    private var unhealthyStreak = 0
+
+    /// Confirms the menu bar item is actually showing where it should be, and rebuilds it from scratch if not.
+    /// macOS can drop a status item — or leave its window with a stale frame — around a display reconfiguration;
+    /// there is no documented way to ask "why", so this treats "not visible when it should be" as reason enough
+    /// to tear down and reinstall, rather than trying to diagnose the exact AppKit state first. Debounced (two
+    /// consecutive bad readings, spaced apart by the caller) so a single frame drawn mid-transition, before macOS
+    /// has finished laying out the menu bar, does not trigger a needless rebuild.
+    func verifyPresence() {
+        let shouldShowSomething = barEnabled || needsPermission || glyphWhenDisabled
+        guard shouldShowSomething else { unhealthyStreak = 0; return }
+        let healthy: Bool
+        if item == nil {
+            healthy = false
+        } else if showsBar {
+            healthy = screenFrame()?.visible == true
+        } else {
+            // The glyph form: NSStatusItem has no per-mode frame to check other than the button's own window.
+            healthy = item?.button?.window?.isVisible == true
+        }
+        if healthy {
+            if unhealthyStreak > 0 { onDiagnostic?("workspace bar item recovered on its own") }
+            unhealthyStreak = 0
+            return
+        }
+        unhealthyStreak += 1
+        onDiagnostic?("workspace bar item not visible (streak \(unhealthyStreak), presence was \(item == nil ? "none" : (showsBar ? "bar" : "glyph")))")
+        guard unhealthyStreak >= 2 else { return }
+        onDiagnostic?("rebuilding the workspace bar item from scratch")
+        unhealthyStreak = 0
+        remove()
+        refreshPresence()
     }
 
     /// The workspace list is showing (as opposed to just the glyph, or nothing).
@@ -451,17 +499,27 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
 
     // MARK: - Introspection (mac-i3 bar, tests)
 
-    /// Screen frame of the item in AX coordinates (top-left origin), and whether it is actually on a display.
+    /// Screen frame of the item in AX coordinates (top-left origin), and whether it is actually being shown.
+    /// Two different real breakages need two different signals, and each one misses the other:
+    ///  - a hard `removeStatusItem` (simulated by `debugBreak()`) flips `NSWindow.isVisible` to false right away,
+    ///    but leaves `occlusionState` stuck reporting `.visible` (stale, in this app's actual view setup);
+    ///  - macOS silently declining to draw an otherwise still-installed item (observed live, on a real broken
+    ///    instance, around a display change) leaves `isVisible` at its stale `true`, while `occlusionState`
+    ///    correctly flips to not-visible.
+    /// Requiring both to agree the item is fine catches whichever one actually moved.
     func screenFrame() -> (rect: Rect, visible: Bool)? {
         guard let w = item?.button?.window else { return nil }
-        let r = Displays.axRect(w.frame)
-        let onScreen = NSScreen.screens.contains { $0.frame.intersects(w.frame) }
-        return (r, onScreen && w.occlusionState.contains(.visible))
+        return (Displays.axRect(w.frame), w.isVisible && w.occlusionState.contains(.visible))
     }
 
     func debugDictionary() -> [String: Any] {
         var d: [String: Any] = ["enabled": showsBar, "presence": item == nil ? "none" : (showsBar ? "bar" : "glyph"),
                                 "needsPermission": needsPermission, "level": layout.level, "detail": layout.detail, "mode": summary.mode]
+        d["raw_itemIsVisible"] = item?.isVisible ?? NSNull()
+        d["raw_windowExists"] = item?.button?.window != nil
+        d["raw_windowIsVisible"] = item?.button?.window?.isVisible ?? NSNull()
+        d["raw_occlusionVisible"] = item?.button?.window?.occlusionState.contains(.visible) ?? NSNull()
+        d["raw_windowFrame"] = item?.button?.window.map { "\($0.frame)" } ?? "nil"
         d["outputs"] = summary.outputs.map { o -> [String: Any] in
             ["number": o.number, "name": o.name, "workspaces": o.workspaces.map {
                 ["name": $0.name, "showing": $0.showing, "focused": $0.focused, "windows": $0.windows.count,

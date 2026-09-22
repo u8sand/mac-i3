@@ -88,10 +88,20 @@ enum AX {
     }
 
     /// False only when the element is definitively gone. Timeouts and "app busy" errors (which happen
-    /// while an app is in the middle of a window drag) do not mean the window closed.
+    /// while an app is in the middle of a window drag, or is still waking from sleep) do not mean the
+    /// window closed, so the caller should keep waiting rather than treat this as a removal.
     static func exists(_ el: AXUIElement) -> Bool {
         var v: CFTypeRef?
         return AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &v) != .invalidUIElement
+    }
+
+    /// A short messaging timeout, applied directly to a *window* element (not just its application), so a call
+    /// through a long-cached reference (`wins[id].element`, reused for the window's whole lifetime) can never
+    /// block the main thread for more than a moment, however unresponsive its owning app currently is (busy,
+    /// suspended, or still waking from sleep). Apple's docs say a timeout set on an individual element applies
+    /// only to messages sent to that object, so this is set once per window, right when it is first cached.
+    static func boundMessaging(_ el: AXUIElement, seconds: Float = 0.35) {
+        AXUIElementSetMessagingTimeout(el, seconds)
     }
 
     static func isSettable(_ el: AXUIElement, _ name: String) -> Bool {
