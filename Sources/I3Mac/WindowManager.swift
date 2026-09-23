@@ -34,6 +34,10 @@ public final class WindowManager {
     var retries: [WindowID: Int] = [:]
     var parked = Set<WindowID>()
     var observers: [pid_t: AXObserver] = [:]
+    /// The most recent saved layout, kept in memory so a window that turns up mid-session without the
+    /// tree already knowing about it can be put back where it last was instead of tiled in fresh (see
+    /// `reconcile()`). Set once at startup by `attemptRestore()` and kept current by `saveSnapshot()`.
+    var lastSnapshot: TreeSnapshot?
 
     var lastOSFocus: WindowID?
     /// The tree's focused window at the last layout pass; a change means we must move OS focus.
@@ -254,6 +258,7 @@ public final class WindowManager {
         guard config.layoutPersistence,
               let data = try? Data(contentsOf: URL(fileURLWithPath: AppInfo.statePath)),
               let snapshot = try? JSONDecoder().decode(TreeSnapshot.self, from: data) else { return nil }
+        lastSnapshot = snapshot
         let result = enumerate()
         for f in result.found { wins[f.id] = Win(element: f.element, pid: f.pid) }
         let live = result.found.map { LiveWindow(id: $0.id, appName: $0.appName, title: $0.title) }
@@ -270,6 +275,7 @@ public final class WindowManager {
         let snap = tree.snapshot { [wins] id in
             wins[id].flatMap { NSRunningApplication(processIdentifier: $0.pid)?.localizedName }
         }
+        lastSnapshot = snap
         guard let data = try? JSONEncoder().encode(snap) else { return }
         let path = AppInfo.statePath
         try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
@@ -686,6 +692,19 @@ public final class WindowManager {
             tree.removeWindow(id)
             wins[id] = nil; applied[id] = nil; retries[id] = nil; parked.remove(id)
             changed = true
+        }
+        // Before tiling an unknown window in fresh (which would land it on whatever workspace happens to be
+        // focused), try to put it back where the last saved layout says it was — covers a window that
+        // briefly, wrongly, looked gone (a sleep/wake edge case, an AX hiccup) and reappeared, so it does
+        // not lose its place just because this reconcile pass is the one that notices it again.
+        let stillUnknown = found.filter { tree.find($0.id) == nil }
+        if !stillUnknown.isEmpty, let snap = lastSnapshot {
+            let live = stillUnknown.map { LiveWindow(id: $0.id, appName: $0.appName, title: $0.title) }
+            let n = tree.reinsert(from: snap, live: live)
+            if n > 0 {
+                AppInfo.note("reinserted \(n) window(s) that reappeared back into their saved position")
+                changed = true
+            }
         }
         for f in found.sorted(by: { $0.id < $1.id }) where tree.find(f.id) == nil {
             wins[f.id] = Win(element: f.element, pid: f.pid)

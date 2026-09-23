@@ -174,4 +174,90 @@ extension Tree {
 
         return (restored, live.count - restored)
     }
+
+    // MARK: - Reinsert (mid-session safety net)
+
+    /// Unlike `restore`, safe to call repeatedly against a tree that already has windows in it: whenever a
+    /// live window turns up that the tree does not currently know about (for any reason -- a transient
+    /// false "gone" verdict, a display fold, anything), this puts it back where the last saved snapshot
+    /// says it was, together with any of its former workspace-mates that are also still missing, instead
+    /// of leaving the caller to tile it fresh into whatever workspace happens to be focused right now --
+    /// which is what silently collapses windows that go missing and reappear into one flat row. A
+    /// workspace that is already fully intact in the live tree is left completely alone: only one that
+    /// actually gains a window this call has its saved layout/split orientation reapplied, so a workspace
+    /// nothing here concerns keeps whatever the user has since done to it live, even if that has drifted
+    /// from what was last saved.
+    @discardableResult
+    public func reinsert(from snapshot: TreeSnapshot, live: [LiveWindow]) -> Int {
+        var pool = live
+        var restored = 0
+
+        func consume(_ id: WindowID?, _ appName: String?, _ title: String?) -> LiveWindow? {
+            if let id, let i = pool.firstIndex(where: { $0.id == id }) { return pool.remove(at: i) }
+            if let appName, let title, let i = pool.firstIndex(where: { $0.appName == appName && $0.title == title }) {
+                return pool.remove(at: i)
+            }
+            return nil
+        }
+
+        func build(_ node: TreeSnapshot.Node) -> Con? {
+            guard let layout = node.layout else {
+                guard let w = consume(node.windowID, node.appName, node.title) else { return nil }
+                let con = Con(.window)
+                con.windowID = w.id
+                con.title = w.title
+                con.percent = node.percent
+                con.fullscreen = node.fullscreen
+                restored += 1
+                return con
+            }
+            let kids = node.children.compactMap(build)
+            guard !kids.isEmpty else { return nil }
+            let con = Con(.split)
+            con.layout = layout
+            con.lastSplit = layout.isTabLike ? .splitH : layout
+            con.percent = node.percent
+            for k in kids { con.attach(k) }
+            con.fixPercent()
+            return con
+        }
+
+        func matchOutput(_ saved: TreeSnapshot.Output) -> Con? {
+            if let exact = root.children.first(where: { $0.name == saved.name }) { return exact }
+            let byPosition = numberedOutputs
+            return byPosition.indices.contains(saved.number - 1) ? byPosition[saved.number - 1] : nil
+        }
+
+        for savedOut in snapshot.outputs {
+            guard !pool.isEmpty else { break }
+            guard let out = matchOutput(savedOut) else { continue }
+            for savedWs in savedOut.workspaces {
+                guard !pool.isEmpty else { break }
+                let existed = workspace(named: savedWs.name) != nil
+                let ws = workspace(named: savedWs.name) ?? createWorkspace(savedWs.name, on: out)
+                var gained = false
+                for node in savedWs.nodes {
+                    if let con = build(node) { ws.attach(con); gained = true }
+                }
+                for f in savedWs.floating {
+                    guard let w = consume(f.windowID, f.appName, f.title) else { continue }
+                    let con = Con(.window)
+                    con.windowID = w.id
+                    con.title = w.title
+                    con.isFloating = true
+                    con.rect = f.rect
+                    ws.attach(con)
+                    restored += 1
+                    gained = true
+                }
+                if gained {
+                    if !existed { ws.layout = savedWs.layout; ws.lastSplit = savedWs.layout.isTabLike ? .splitH : savedWs.layout }
+                    ws.fixPercent()
+                } else if !existed {
+                    ws.detach()   // nothing from this saved workspace was actually missing: undo the speculative create
+                }
+            }
+        }
+        return restored
+    }
 }

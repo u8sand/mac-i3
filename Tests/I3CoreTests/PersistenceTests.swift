@@ -180,6 +180,77 @@ func roundTrip(_ ids: [WindowID], appName: @escaping (WindowID) -> String? = { _
     }
 }
 
+/// `reinsert`, unlike `restore`, runs against a tree that already has windows in it -- the mid-session
+/// safety net for a window that turns up without the tree already knowing about it (a transient false
+/// "gone" verdict, a display fold, anything), so it does not just get tiled into whatever workspace
+/// happens to be focused right now.
+@Suite struct Reinsertion {
+    @Test func missingWindowReturnsToItsOwnWorkspaceNotTheFocusedOne() {
+        let t = makeTree([1, 2])                 // workspace "1": H[1 2]
+        t.run("workspace 2"); t.addWindow(3); t.addWindow(4)   // workspace "2": H[3 4]
+        let snap = t.snapshot(appName: { _ in "App" })
+
+        t.removeWindow(3)                         // "3" transiently looks gone
+        t.run("workspace 1")                       // focus is on workspace "1" when it reappears
+        #expect(t.workspace(named: "1")?.name != nil && t.find(3) == nil)
+
+        let n = t.reinsert(from: snap, live: [LiveWindow(id: 3, appName: "App", title: "w3")])
+        #expect(n == 1)
+        #expect(t.find(3)?.workspace?.name == "2", "should return to workspace 2, not land on the focused workspace 1")
+        #expect(t.workspace(named: "1")?.children.compactMap { $0.windowID } == [1, 2], "workspace 1 must be untouched")
+    }
+
+    @Test func siblingsAlreadyLiveAreLeftAlone() {
+        let t = makeTree([1, 2, 3])               // H[1 2 3]
+        let snap = t.snapshot(appName: { _ in "App" })
+        t.removeWindow(2)
+        #expect(t.activeShape == "H[1 3*]")
+
+        let n = t.reinsert(from: snap, live: [LiveWindow(id: 2, appName: "App", title: "w2")])
+        #expect(n == 1)
+        #expect(Set(t.allWindowIDs) == [1, 2, 3])
+        #expect(violations(t).isEmpty)
+    }
+
+    @Test func aWindowWithNoSavedPositionIsLeftForTheCallerToAddFresh() {
+        let t = makeTree([1, 2])
+        let snap = t.snapshot(appName: { _ in "App" })
+        let n = t.reinsert(from: snap, live: [LiveWindow(id: 99, appName: "NewApp", title: "brand new")])
+        #expect(n == 0)
+        #expect(t.find(99) == nil)
+        #expect(Set(t.allWindowIDs) == [1, 2], "must not fabricate an empty workspace for a window it could not match")
+    }
+
+    @Test func aWorkspaceThatWasEntirelyGoneIsRecreated() {
+        let t = makeTree([1])                     // workspace "1": [1]
+        t.run("workspace 2"); t.addWindow(2); t.addWindow(3)   // workspace "2": H[2 3]
+        let snap = t.snapshot(appName: { _ in "App" })
+
+        t.run("workspace 1")                       // move focus off "2" before emptying it
+        t.removeWindow(2); t.removeWindow(3)        // workspace "2" had no other windows: it is pruned entirely
+        #expect(t.workspace(named: "2") == nil)
+
+        let n = t.reinsert(from: snap, live: [2, 3].map { LiveWindow(id: $0, appName: "App", title: "w\($0)") })
+        #expect(n == 2)
+        #expect(t.workspace(named: "2")?.children.compactMap { $0.windowID }.sorted() == [2, 3])
+        #expect(violations(t).isEmpty)
+    }
+
+    @Test func aSpeculativelyCreatedWorkspaceIsUndoneWhenNothingActuallyMatches() {
+        let t = makeTree([1])
+        t.run("workspace 2"); t.addWindow(2)
+        let snap = t.snapshot(appName: { _ in "App" })
+        t.run("workspace 1")
+        t.removeWindow(2)
+        #expect(t.workspace(named: "2") == nil)
+
+        // Nothing in `live` matches workspace 2's saved window -- it must not be left behind as a stray empty workspace.
+        let n = t.reinsert(from: snap, live: [])
+        #expect(n == 0)
+        #expect(t.workspace(named: "2") == nil)
+    }
+}
+
 @Suite struct SnapshotFuzz {
     @Test func randomTreesRoundTripWithoutCorruption() {
         for seed in UInt64(1)...200 {
