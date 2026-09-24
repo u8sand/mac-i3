@@ -34,8 +34,8 @@ from the built-in default the first time); warnings and config errors go to `~/L
 * **Command line:** the app contains the CLI. To use `mac-i3 msg …` and friends from a terminal:
   `sudo ln -s /Applications/mac-i3.app/Contents/MacOS/mac-i3 /usr/local/bin/mac-i3`.
 * **Updating:** quit mac-i3, replace the app in Applications, open it. Because the build is ad-hoc signed, macOS ties
-  the permissions to that exact build, so after an update you may have to switch mac-i3 off and on again (or remove it
-  with `-` and re-add it) in the two Privacy lists. A build signed with a Developer ID keeps them.
+  the permissions to that exact build, so after an update you likely have to remove it
+  with `-`, restart it, and then enable it again. I've found only accessibility permissions are required.
 * **Uninstall:** choose Quit, delete `/Applications/mac-i3.app`, and optionally `~/.config/mac-i3`; remove mac-i3 from
   the Privacy lists and Login Items in System Settings.
 
