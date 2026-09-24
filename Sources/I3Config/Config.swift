@@ -54,6 +54,9 @@ public struct Config {
     /// Save the container tree after every change, and restore it at startup, so a `restart` (or recovering
     /// from a crash) does not flatten your splits, tabs and stacks back to a plain row.
     public var layoutPersistence = true
+    /// Verbose logging (~/Library/Logs/mac-i3.log or stderr): the same detail as the `-v` CLI flag, for a
+    /// packaged `.app` build that has no command line to pass it on.
+    public var verbose = false
     public var startup: [String] = []
     public var forWindow: [WindowRule] = []
     public var assign: [WindowRule] = []

@@ -152,6 +152,11 @@ public enum DefaultConfig {
     # Remember your splits, tabs and stacks (~/.config/mac-i3/state.json) so `restart` (Control+Option+R
     # in the default bindings) restores them instead of re-tiling every window into a plain row.
     # layout_persistence yes
+    #
+    # Detailed logging (~/Library/Logs/mac-i3.log when launched as an app, otherwise the terminal) -- the
+    # same detail as the -v command-line flag, for when there is no command line to pass it on. Takes
+    # effect immediately on `reload`.
+    # verbose no
     """
 
     /// i3's own stock key bindings (home-row focus, resize mode...), with Option as $mod.

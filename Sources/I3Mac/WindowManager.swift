@@ -86,7 +86,9 @@ public final class WindowManager {
         tree.setOutputLabels(Displays.labels(), primary: Displays.primaryName())
     }
 
-    func log(_ s: String) { if opts.verbose { FileHandle.standardError.write(Data(("[mac-i3] " + s + "\n").utf8)) } }
+    /// The CLI's `-v` (`opts.verbose`, fixed for the process) or the config's `verbose` (`config.verbose`,
+    /// toggles live on `reload` -- the only way to turn this on for a packaged `.app`, which has no command line).
+    func log(_ s: String) { if opts.verbose || config.verbose { FileHandle.standardError.write(Data(("[mac-i3] " + s + "\n").utf8)) } }
 
     // MARK: - Lifecycle
 

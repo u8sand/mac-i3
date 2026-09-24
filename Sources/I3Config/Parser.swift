@@ -127,6 +127,8 @@ public enum ConfigParser {
                 cfg.mouseGestures = !(rest == "no" || rest == "off" || rest == "false")
             case "layout_persistence":
                 cfg.layoutPersistence = !(rest == "no" || rest == "off" || rest == "false")
+            case "verbose":
+                cfg.verbose = !(rest == "no" || rest == "off" || rest == "false")
             case "focus_wrapping":
                 cfg.focusWrapping = !(rest == "no")
             case "exec", "exec_always":

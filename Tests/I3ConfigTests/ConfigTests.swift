@@ -210,3 +210,12 @@ import Testing
         #expect(!ConfigParser.parse("layout_persistence off").config.layoutPersistence)
     }
 }
+
+@Suite struct VerboseOption {
+    @Test func defaultsOffAndCanBeTurnedOn() {
+        #expect(!ConfigParser.parse("").config.verbose)
+        #expect(ConfigParser.parse("verbose yes").config.verbose)
+        #expect(!ConfigParser.parse("verbose no").config.verbose)
+        #expect(!ConfigParser.parse("verbose off").config.verbose)
+    }
+}
