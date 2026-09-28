@@ -49,4 +49,43 @@ public enum Displays {
 
     /// Full frames (for off-screen detection).
     static func fullFrames() -> [Rect] { NSScreen.screens.map { axRect($0.frame) } }
+
+    /// Width the primary menu bar has for our status item: the stretch right of the notch (or, without one,
+    /// right of the frontmost app's menus), minus every other status item in it. A status item wider than
+    /// this is not squeezed or scrolled by macOS — it is silently not shown at all. `ownWindow`/`ownFrame`
+    /// identify our own item, which is left out of the sum. Nil when it cannot be measured.
+    static func menuBarRoom(ownWindow: Int?, ownFrame: Rect?) -> Double? {
+        guard let screen = NSScreen.screens.first else { return nil }
+        let width = Double(screen.frame.width)
+        let left: Double
+        if let right = screen.auxiliaryTopRightArea {
+            left = Double(right.minX)
+        } else if let menus = frontmostMenusRight() {
+            left = menus
+        } else {
+            return nil
+        }
+        let statusLevel = Int(CGWindowLevelForKey(.statusWindow))
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        var used = 0.0
+        for w in windows where (w[kCGWindowLayer as String] as? Int) == statusLevel {
+            guard let d = w[kCGWindowBounds as String] as? NSDictionary, let b = CGRect(dictionaryRepresentation: d),
+                  b.minY <= 1, b.minX >= left - 1, b.maxX <= width + 2 else { continue }
+            if let n = w[kCGWindowNumber as String] as? Int, n == ownWindow { continue }
+            if let own = ownFrame, abs(b.minX - own.x) < 2, abs(b.width - own.w) < 2 { continue }
+            used += b.width
+        }
+        return max(0, width - left - used)
+    }
+
+    /// Right edge of the frontmost app's menus (the bar's left limit on a display without a notch).
+    static func frontmostMenusRight() -> Double? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(ax, 0.2)
+        guard let bar = AX.attr(ax, kAXMenuBarAttribute), CFGetTypeID(bar) == AXUIElementGetTypeID(),
+              let items = AX.attr(bar as! AXUIElement, kAXChildrenAttribute) as? [AXUIElement],
+              let last = items.last, let f = AX.frame(last) else { return nil }
+        return f.maxX
+    }
 }

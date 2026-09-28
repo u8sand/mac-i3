@@ -34,10 +34,19 @@ public final class WindowManager {
     var retries: [WindowID: Int] = [:]
     var parked = Set<WindowID>()
     var observers: [pid_t: AXObserver] = [:]
-    /// The most recent saved layout, kept in memory so a window that turns up mid-session without the
-    /// tree already knowing about it can be put back where it last was instead of tiled in fresh (see
-    /// `reconcile()`). Set once at startup by `attemptRestore()` and kept current by `saveSnapshot()`.
-    var lastSnapshot: TreeSnapshot?
+    /// Where each removed window was, so it goes back there if it turns up again (see `recoverReturning`):
+    /// a snapshot of the tree taken just before each batch of removals, and which batch each removed window
+    /// belongs to. The saved layout on disk cannot serve here — it is rewritten right after the removal.
+    var recoveryBatches: [Int: TreeSnapshot] = [:]
+    var recovery: [WindowID: (batch: Int, at: Date)] = [:]
+    var nextRecoveryBatch = 0
+    /// Tracked windows currently in macOS's own fullscreen (in a Space of their own, so not listed with the
+    /// app's other windows): they keep their place in the tree, and are left alone by the layout until they return.
+    var nativeFullscreen = Set<WindowID>()
+    /// The screen can't be trusted to show windows: the system or its displays are asleep, or the screen is
+    /// locked. Every app's window list can come back short then, so no window is removed until it is over.
+    var systemAsleep = false, screensAsleep = false, screenLocked = false
+    var quiet: Bool { systemAsleep || screensAsleep || screenLocked }
 
     var lastOSFocus: WindowID?
     /// The tree's focused window at the last layout pass; a change means we must move OS focus.
@@ -213,37 +222,69 @@ public final class WindowManager {
         installMouseMonitor()
         let nc = NSWorkspace.shared.notificationCenter
         for n in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
-                  NSWorkspace.didActivateApplicationNotification, NSWorkspace.didHideApplicationNotification,
-                  NSWorkspace.didUnhideApplicationNotification] {
+                  NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
             nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in self?.requestReconcile() }
+        }
+        nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.requestReconcile()
+            self?.bar?.refit()   // without a notch, the frontmost app's menus decide how much room the bar has
         }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             self?.requestReconcile()
         }
+        // Asleep, displays off, or locked: while any of these holds, window lists can't be trusted. Seen in the
+        // log: locking the screen emptied every app's window list at once, and each window was then dropped as
+        // gone five seconds later — although none had closed.
         nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            AppInfo.note("system is going to sleep: no window will be removed until well after it wakes")
-            self.sleepGuardUntil = .distantFuture
+            self?.systemAsleep = true; self?.quietChanged("system is going to sleep")
         }
         nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            AppInfo.note("system woke up; giving every window a fresh grace period before reconciling")
-            self.missingSince.removeAll()
-            self.ownerMissingSince.removeAll()
-            self.sleepGuardUntil = Date().addingTimeInterval(4)   // AX/WindowServer needs a moment to settle
-            self.lastReconcileAt = Date()
-            self.requestReconcile()
+            self?.systemAsleep = false; self?.quietChanged("system woke up")
+        }
+        nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.screensAsleep = true; self?.quietChanged("displays went to sleep")
+        }
+        nc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.screensAsleep = false; self?.quietChanged("displays woke up")
+        }
+        let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+            self?.screenLocked = true; self?.quietChanged("screen locked")
+        }
+        dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
+            self?.screenLocked = false; self?.quietChanged("screen unlocked")
         }
         Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in self?.reconcile() }
         // A general safety net, independent of the display-change hook above: covers any other way the item
-        // could end up missing that a display reconfiguration is not the trigger for.
-        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.bar?.verifyPresence() }
+        // could end up missing that a display reconfiguration is not the trigger for. Not while the screen is
+        // off or locked: the menu bar is not drawn then, so the item always looks missing.
+        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            guard let self, !self.quiet else { return }
+            self.bar?.verifyPresence()
+        }
 
         restoreOffscreenWindows(quiet: true)   // recover from a previous crash
         let restore = attemptRestore()
         reconcile(prefetched: restore.map { ($0.found, $0.unavailable) }, forceApply: (restore?.restored ?? 0) > 0)
         for cmd in config.startup { execShell(cmd) }
         log("running; \(tree.allWindowIDs.count) windows managed")
+    }
+
+    /// Entering a quiet period freezes window removal; leaving the last one gives every window a fresh grace
+    /// period (AX needs a moment to settle after a wake or unlock) before anything can be removed again.
+    func quietChanged(_ reason: String) {
+        if quiet {
+            AppInfo.note("\(reason): no window will be removed until the screen is back")
+            sleepGuardUntil = .distantFuture
+        } else {
+            AppInfo.note("\(reason): giving every window a fresh grace period before reconciling")
+            missingSince.removeAll()
+            ownerMissingSince.removeAll()
+            sleepGuardUntil = Date().addingTimeInterval(4)
+            lastReconcileAt = Date()
+            requestReconcile()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.bar?.verifyPresence() }
+        }
     }
 
     // MARK: - Layout persistence
@@ -260,7 +301,6 @@ public final class WindowManager {
         guard config.layoutPersistence,
               let data = try? Data(contentsOf: URL(fileURLWithPath: AppInfo.statePath)),
               let snapshot = try? JSONDecoder().decode(TreeSnapshot.self, from: data) else { return nil }
-        lastSnapshot = snapshot
         let result = enumerate()
         for f in result.found { wins[f.id] = Win(element: f.element, pid: f.pid) }
         let live = result.found.map { LiveWindow(id: $0.id, appName: $0.appName, title: $0.title) }
@@ -271,17 +311,50 @@ public final class WindowManager {
         return (result.found, result.unavailable, restored)
     }
 
+    func currentSnapshot() -> TreeSnapshot {
+        tree.snapshot { [wins] id in wins[id].flatMap { NSRunningApplication(processIdentifier: $0.pid)?.localizedName } }
+    }
+
     /// Writes the current tree to disk, so the next `restart` (or a relaunch after a crash) can restore it.
     func saveSnapshot() {
         guard config.layoutPersistence else { return }
-        let snap = tree.snapshot { [wins] id in
-            wins[id].flatMap { NSRunningApplication(processIdentifier: $0.pid)?.localizedName }
-        }
-        lastSnapshot = snap
-        guard let data = try? JSONEncoder().encode(snap) else { return }
+        guard let data = try? JSONEncoder().encode(currentSnapshot()) else { return }
         let path = AppInfo.statePath
         try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
+    /// How long, and for how many windows, a removed window's place is remembered in case it comes back (a
+    /// window an app hid and reshowed, a lock screen). Window IDs are not reused within a login session, so
+    /// these only bound memory: most removed windows really did close and never come back.
+    static let recoveryWindow: TimeInterval = 12 * 3600
+    static let recoveryLimit = 200
+
+    func pruneRecovery() {
+        let now = Date()
+        recovery = recovery.filter { now.timeIntervalSince($0.value.at) < WindowManager.recoveryWindow }
+        if recovery.count > WindowManager.recoveryLimit {
+            for (id, _) in recovery.sorted(by: { $0.value.at < $1.value.at }).prefix(recovery.count - WindowManager.recoveryLimit) {
+                recovery[id] = nil
+            }
+        }
+        let referenced = Set(recovery.values.map(\.batch))
+        recoveryBatches = recoveryBatches.filter { referenced.contains($0.key) }
+    }
+
+    /// Puts windows the tree dropped (however wrongly) back where they were the moment before, matched by
+    /// window ID. Returns how many it placed; the rest are left for the caller to tile in as new windows.
+    func recoverReturning(_ unknown: [Found]) -> Int {
+        pruneRecovery()
+        let byBatch = Dictionary(grouping: unknown.filter { recovery[$0.id] != nil }) { recovery[$0.id]!.batch }
+        var placed = 0
+        for batch in byBatch.keys.sorted(by: >) {   // most recent removal first: the closest picture of now
+            guard let snap = recoveryBatches[batch], let returning = byBatch[batch] else { continue }
+            placed += tree.reinsert(from: snap, live: returning.map { LiveWindow(id: $0.id, appName: $0.appName, title: $0.title) })
+        }
+        for f in unknown where tree.find(f.id) != nil { recovery[f.id] = nil }
+        pruneRecovery()
+        return placed
     }
 
     func die(_ msg: String) -> Never {
@@ -389,8 +462,15 @@ public final class WindowManager {
         guard down, let b = bindingIndex[mode]?[UInt32(mods.rawValue) << 16 | UInt32(code)] else { return false }
         let command = b.command
         DispatchQueue.main.async { [weak self] in
-            self?.log("key \(b.chord) -> \(command)")
-            _ = self?.execute(command)
+            guard let self else { return }
+            // Bindings never reach us at the lock screen or with the displays off: if a notification that the
+            // screen came back was missed, this is proof that it did.
+            if self.quiet {
+                self.systemAsleep = false; self.screensAsleep = false; self.screenLocked = false
+                self.quietChanged("key binding used")
+            }
+            self.log("key \(b.chord) -> \(command)")
+            _ = self.execute(command)
         }
         return true
     }
@@ -476,13 +556,16 @@ public final class WindowManager {
         case "debug-simulate-sleep":
             // Test-only: exercises the exact same guard the real willSleep/didWake notifications set, without
             // needing an actual system suspend. Never reachable except by deliberately sending this over IPC.
-            sleepGuardUntil = .distantFuture
+            systemAsleep = true; quietChanged("simulated sleep")
             return "ok"
         case "debug-simulate-wake":
-            missingSince.removeAll()
-            ownerMissingSince.removeAll()
-            sleepGuardUntil = Date().addingTimeInterval(4)
-            lastReconcileAt = Date()
+            systemAsleep = false; quietChanged("simulated wake")
+            return "ok"
+        case "debug-simulate-lock":
+            screenLocked = true; quietChanged("simulated lock")
+            return "ok"
+        case "debug-simulate-unlock":
+            screenLocked = false; quietChanged("simulated unlock")
             return "ok"
         case "debug-break-bar":
             // Test-only: reproduces "macOS silently dropped the status item" without needing a real display
@@ -658,13 +741,30 @@ public final class WindowManager {
         let foundIDs = Set(found.map { $0.id })
         for id in foundIDs { missingSince[id] = nil }
         for id in foundIDs where wins[id].map({ alivePids.contains($0.pid) }) ?? true { ownerMissingSince[id] = nil }
+        for id in foundIDs where nativeFullscreen.remove(id) != nil {
+            log("~ window \(id) left fullscreen")
+            applied[id] = nil   // its frame is whatever macOS restored: lay it out again
+            changed = true
+        }
+        var removalSnapshot: Int?
+        // Showing another app's fullscreen Space: every window on the desktop drops out of its app's window list
+        // (lists cover the current Space only) until the user comes back, so none of them is judged gone meanwhile.
+        let inFullscreenSpace = tree.allWindowIDs.contains { !foundIDs.contains($0) } && frontmostIsFullscreen()
         for id in tree.allWindowIDs where !foundIDs.contains(id) {
             // Mid-sleep, or shortly after waking: every AX signal below is suspect (see `sleepGuardUntil`), so no
             // verdict is reached at all this pass — not even the generous grace period is allowed to expire.
-            if Date() < sleepGuardUntil { missingSince[id] = nil; continue }
+            if Date() < sleepGuardUntil || inFullscreenSpace { missingSince[id] = nil; continue }
             // Its app could not even list its windows this pass (busy, suspended, or still waking from sleep):
             // we have no information at all about this window, so it is left exactly as it is.
             if let pid = wins[id]?.pid, unavailableApps.contains(pid) { continue }
+            // In macOS's own fullscreen, a window lives in a Space of its own and drops out of its app's window
+            // list, for as long as it stays there. It keeps its place in the tree; the layout skips it meanwhile.
+            if let w = wins[id], AX.bool(w.element, "AXFullScreen") == true {
+                if nativeFullscreen.insert(id).inserted { log("~ window \(id) is in fullscreen; keeping its place") }
+                missingSince[id] = nil
+                ownerMissingSince[id] = nil
+                continue
+            }
             // A confirmed-dead element (the app answered, and this handle is definitively invalid) is removed
             // right away. Anything less certain — the app is merely slow to answer about this one window — gets
             // a generous, wall-clock grace period (not a pass count, so it is immune to any timing jitter),
@@ -689,22 +789,26 @@ public final class WindowManager {
                 continue
             }
             log("- window \(id) \"\(tree.find(id)?.title ?? "")\" gone (ownerConfirmedGone=\(ownerConfirmedGone) elementConfirmedGone=\(elementConfirmedGone) waited=\(Date().timeIntervalSince(firstMissed))s)")
+            if removalSnapshot == nil {   // one picture of the tree, taken before this pass removes anything
+                removalSnapshot = nextRecoveryBatch
+                recoveryBatches[nextRecoveryBatch] = currentSnapshot()
+                nextRecoveryBatch += 1
+            }
+            recovery[id] = (removalSnapshot!, now)
+            if recovery.count > WindowManager.recoveryLimit { pruneRecovery() }
             missingSince[id] = nil
             ownerMissingSince[id] = nil
             tree.removeWindow(id)
-            wins[id] = nil; applied[id] = nil; retries[id] = nil; parked.remove(id)
+            wins[id] = nil; applied[id] = nil; retries[id] = nil; parked.remove(id); nativeFullscreen.remove(id)
             changed = true
         }
-        // Before tiling an unknown window in fresh (which would land it on whatever workspace happens to be
-        // focused), try to put it back where the last saved layout says it was — covers a window that
-        // briefly, wrongly, looked gone (a sleep/wake edge case, an AX hiccup) and reappeared, so it does
-        // not lose its place just because this reconcile pass is the one that notices it again.
+        // A window the tree dropped that has turned up again goes back where it was, rather than being tiled in
+        // fresh on whatever workspace happens to be focused (none of the "gone" signals above is infallible).
         let stillUnknown = found.filter { tree.find($0.id) == nil }
-        if !stillUnknown.isEmpty, let snap = lastSnapshot {
-            let live = stillUnknown.map { LiveWindow(id: $0.id, appName: $0.appName, title: $0.title) }
-            let n = tree.reinsert(from: snap, live: live)
+        if !stillUnknown.isEmpty, !recovery.isEmpty {
+            let n = recoverReturning(stillUnknown)
             if n > 0 {
-                AppInfo.note("reinserted \(n) window(s) that reappeared back into their saved position")
+                AppInfo.note("put \(n) returning window(s) back where they were")
                 changed = true
             }
         }
@@ -732,6 +836,15 @@ public final class WindowManager {
             changed = true
         } else if syncFocusFromOS() { changed = true }
         if changed { applyLayout() } else { verifyFrames() }
+    }
+
+    /// The frontmost app's focused window is in macOS's own fullscreen, i.e. its fullscreen Space is showing.
+    func frontmostIsFullscreen() -> Bool {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return false }
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(ax, 0.2)
+        guard let w = AX.attr(ax, kAXFocusedWindowAttribute), CFGetTypeID(w) == AXUIElementGetTypeID() else { return false }
+        return AX.bool(w as! AXUIElement, "AXFullScreen") == true
     }
 
     func describeOutputs(_ o: [(name: String, rect: Rect)]) -> [String] {
@@ -797,13 +910,13 @@ public final class WindowManager {
         let res = tree.computeLayout()
         let pp = parkPoint
         for id in res.hidden {
-            guard let w = wins[id], !parked.contains(id) else { continue }
+            guard let w = wins[id], !parked.contains(id), !nativeFullscreen.contains(id) else { continue }
             AX.setPosition(w.element, x: pp.x, y: pp.y)
             parked.insert(id)
             applied[id] = nil
         }
         for (id, r) in res.frames {
-            guard let w = wins[id] else { continue }
+            guard let w = wins[id], !nativeFullscreen.contains(id) else { continue }
             if parked.contains(id) || applied[id] != r {
                 AX.setFrame(w.element, r)
                 applied[id] = r
@@ -837,7 +950,8 @@ public final class WindowManager {
     func verifyFrames() {
         guard NSEvent.pressedMouseButtons == 0, Date().timeIntervalSince(lastMouseActivity) > 0.6 else { return }
         for (id, want) in applied {
-            guard !parked.contains(id), let w = wins[id], (retries[id] ?? 0) < 2, let actual = AX.frame(w.element) else { continue }
+            guard !parked.contains(id), !nativeFullscreen.contains(id), let w = wins[id], (retries[id] ?? 0) < 2,
+                  let actual = AX.frame(w.element) else { continue }
             if let con = tree.find(id), con.isFloating { continue }
             let posOff = abs(actual.x - want.x) > 3 || abs(actual.y - want.y) > 3
             let sizeOff = abs(actual.w - want.w) > 40 || abs(actual.h - want.h) > 40

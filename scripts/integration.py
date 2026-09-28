@@ -16,6 +16,7 @@ window manager (AeroSpace, yabai...) running.
 """
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -460,6 +461,42 @@ def s_layout_persistence_survives_a_closed_window(d):
 s_layout_persistence_survives_a_closed_window.config = "layout_persistence yes\n"
 
 
+def _hide(d, titles, show=False):
+    """Hides (SIGUSR1) or shows (SIGUSR2) test windows without closing them: the same window, same ID."""
+    for t in titles:
+        os.kill(d.procs[t].pid, signal.SIGUSR2 if show else signal.SIGUSR1)
+
+
+def s_vanished_windows_come_back_in_place(d):
+    """Windows that drop out of their apps' window lists and come back (as every window did around a screen
+    lock, before the lock guard existed) return to their own containers, not to wherever focus happens to be."""
+    d.spawn("A"); d.spawn("B"); d.spawn("C")
+    d.key("Mod1+v"); d.spawn("D")                                     # H[A B V[C D]]
+    before = [s.replace("*", "") for s in d.state()["shape"]]
+    _hide(d, "ABCD")
+    d.wait(lambda s: len(s["windows"]) == 0, "the hidden windows to be dropped", timeout=10)
+    _hide(d, "ABCD", show=True)
+    d.wait(lambda s: len(s["windows"]) == 4, "the windows to come back", timeout=8)
+    d.settle(0.5)
+    after = [s.replace("*", "") for s in d.state()["shape"]]
+    assert after == before, f"windows did not come back in place:\n  before: {before}\n  after:  {after}"
+
+
+def s_lock_keeps_windows(d):
+    """While the screen is locked (or asleep), no window is removed, however long its app stops listing it."""
+    d.spawn("A"); d.spawn("B")
+    before = [s.replace("*", "") for s in d.state()["shape"]]
+    assert run("msg", "debug-simulate-lock").stdout.strip() == "ok"
+    _hide(d, "AB")
+    time.sleep(6.5)                                                   # past both the instant and the 5 s removal paths
+    kept = len(d.state()["windows"])
+    _hide(d, "AB", show=True)
+    run("msg", "debug-simulate-unlock")
+    assert kept == 2, f"windows were removed while locked ({kept} left)"
+    d.settle(1.0)
+    assert [s.replace("*", "") for s in d.state()["shape"]] == before
+
+
 def s_crash_restore(d):
     """SIGKILL leaves windows parked; `mac-i3 restore` (and the next start) bring them back."""
     O = d.output()
@@ -847,7 +884,11 @@ def s_workspace_bar_self_heal(d):
     debug hook, since neither a real display swap nor a real sleep reproduced it directly), mac-i3 notices
     and rebuilds it within a couple of checks -- both via an explicit verify call and via a real display
     change's own automatic follow-up checks."""
-    assert _bar()["visible"] is True
+    for _ in range(30):                                               # macOS lays a new status item out a moment after it is added
+        if _bar().get("visible") is True:
+            break
+        time.sleep(0.1)
+    assert _bar()["visible"] is True, "the bar never became visible after startup"
     assert run("msg", "debug-break-bar").stdout.strip() == "ok"
     d.settle(0.3)
     assert _bar()["visible"] is False, "the break should be detected as not visible"

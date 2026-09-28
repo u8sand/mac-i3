@@ -236,6 +236,53 @@ func roundTrip(_ ids: [WindowID], appName: @escaping (WindowID) -> String? = { _
         #expect(violations(t).isEmpty)
     }
 
+    @Test func aNewWindowWithTheSameTitleAsALiveOneIsNotPulledIntoItsSlot() {
+        let t = makeTree([1])
+        t.run("workspace 2"); t.addWindow(2)
+        let snap = t.snapshot(appName: { _ in "Terminal" })
+        t.run("workspace 1")
+        // A brand-new window titled exactly like window 2 ("Terminal — login" for every new Terminal):
+        // it belongs wherever it opens, not in window 2's workspace.
+        let n = t.reinsert(from: snap, live: [LiveWindow(id: 99, appName: "Terminal", title: "w2")])
+        #expect(n == 0 && t.find(99) == nil)
+    }
+
+    @Test func aReturningWindowGoesBackToItsSavedPosition() {
+        let t = makeTree([1, 2, 3])                // H[1 2 3]
+        let snap = t.snapshot()
+        t.removeWindow(1)
+        #expect(t.reinsert(from: snap, live: [LiveWindow(id: 1, appName: "", title: "w1")]) == 1)
+        #expect(t.activeShape.replacingOccurrences(of: "*", with: "") == "H[1 2 3]")
+    }
+
+    @Test func aReturningWindowRejoinsItsLiveSiblingsContainer() {
+        let t = makeTree([1, 2])
+        t.run("split v"); t.addWindow(3)          // H[1 V[2 3]]
+        let before = t.activeShape.replacingOccurrences(of: "*", with: "")
+        let snap = t.snapshot()
+        t.removeWindow(3)
+        #expect(t.reinsert(from: snap, live: [LiveWindow(id: 3, appName: "", title: "w3")]) == 1)
+        #expect(t.activeShape.replacingOccurrences(of: "*", with: "") == before)
+        #expect(violations(t).isEmpty)
+    }
+
+    @Test func windowsThatVanishedTogetherComeBackInTheirOwnStructure() {
+        // The lock-screen case: every window of a workspace drops out at once, then all of them come back.
+        let t = makeTree([1])
+        t.run("workspace 2"); t.addWindow(2); t.addWindow(3)
+        t.run("split v"); t.addWindow(4); t.run("layout tabbed")
+        let before = t.shape(workspace: "2")?.replacingOccurrences(of: "*", with: "")
+        let snap = t.snapshot()
+        t.run("workspace 1")
+        for id in [2, 3, 4] as [WindowID] { t.removeWindow(id) }
+        #expect(t.workspace(named: "2") == nil)
+
+        let n = t.reinsert(from: snap, live: [2, 3, 4].map { LiveWindow(id: $0, appName: "", title: "w\($0)") })
+        #expect(n == 3)
+        #expect(t.shape(workspace: "2")?.replacingOccurrences(of: "*", with: "") == before)
+        #expect(violations(t).isEmpty)
+    }
+
     @Test func aSpeculativelyCreatedWorkspaceIsUndoneWhenNothingActuallyMatches() {
         let t = makeTree([1])
         t.run("workspace 2"); t.addWindow(2)

@@ -49,6 +49,8 @@ struct BarLayout {
     /// Position in the fallback chain (0 = most detail); raised automatically when the bar would be too wide.
     var level = 0
     var detail = ""
+    /// The width it had to fit in.
+    var budget: CGFloat = 0
 }
 
 /// What the app menu (the items below the window list) can do; set by the daemon.
@@ -135,6 +137,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     func verifyPresence() {
         let shouldShowSomething = barEnabled || needsPermission || glyphWhenDisabled
         guard shouldShowSomething else { unhealthyStreak = 0; return }
+        refit()   // the room may have shrunk since the last layout: a bar too wide for it is not shown at all
         let healthy: Bool
         if item == nil {
             healthy = false
@@ -150,7 +153,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
             return
         }
         unhealthyStreak += 1
-        onDiagnostic?("workspace bar item not visible (streak \(unhealthyStreak), presence was \(item == nil ? "none" : (showsBar ? "bar" : "glyph")))")
+        onDiagnostic?("workspace bar item not visible (streak \(unhealthyStreak), presence was \(item == nil ? "none" : (showsBar ? "bar" : "glyph")), width \(Int(layout.width)) of \(Int(layout.budget)) available, level \(layout.level))")
         guard unhealthyStreak >= 2 else { return }
         onDiagnostic?("rebuilding the workspace bar item from scratch")
         unhealthyStreak = 0
@@ -209,7 +212,21 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     // MARK: - Layout
 
     private static let height: CGFloat = 22
-    private var budget: CGFloat { min(600, (NSScreen.screens.first?.frame.width ?? 1500) * 0.33) }
+    /// The widest the bar may get: what the menu bar actually has free (macOS hides a status item outright
+    /// rather than squeezing it, so a bar that outgrows the room vanishes — with many windows, it did), and
+    /// never more than a third of the screen.
+    private var budget: CGFloat {
+        let cap = min(600, (NSScreen.screens.first?.frame.width ?? 1500) * 0.33)
+        guard let room = Displays.menuBarRoom(ownWindow: item?.button?.window?.windowNumber, ownFrame: screenFrame()?.rect)
+        else { return cap }
+        return max(0, min(cap, CGFloat(room) - 4))
+    }
+
+    /// Re-measures the room in the menu bar and lays the bar out again to fit it (other status items come
+    /// and go; without a notch, each app's menus take a different share).
+    func refit() {
+        if showsBar { relayout() }
+    }
 
     private func icon(for pid: pid_t) -> NSImage? {
         if let c = iconCache[pid] { return c }
@@ -327,7 +344,8 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
                     let all = icons(for: ws)
                     let shown = Array(all.prefix(limit))
                     if !shown.isEmpty {
-                        let extra = all.count - shown.count
+                        // Windows, not apps: "+N" is how many of the workspace's windows have no icon of their own.
+                        let extra = ws.windows.count - shown.count
                         content = .flat(shown.map { $0.0 }, extra: extra)
                         w += 4 + CGFloat(shown.count) * 15 + CGFloat(shown.count - 1) * 2
                         if extra > 0 { w += ("+\(extra)" as NSString).size(withAttributes: [.font: small]).width + 3 }
@@ -353,10 +371,12 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     /// The most detailed step of the fallback chain that fits the budget (the last one if none does).
     private func computeLayout() -> BarLayout {
         let steps = chain()
+        let limit = budget
         var chosen = makeLayout(step: steps[0], level: 0)
-        for (i, step) in steps.enumerated().dropFirst() where chosen.width > budget {
+        for (i, step) in steps.enumerated().dropFirst() where chosen.width > limit {
             chosen = makeLayout(step: step, level: i)
         }
+        chosen.budget = limit
         return chosen
     }
 
@@ -514,7 +534,8 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
 
     func debugDictionary() -> [String: Any] {
         var d: [String: Any] = ["enabled": showsBar, "presence": item == nil ? "none" : (showsBar ? "bar" : "glyph"),
-                                "needsPermission": needsPermission, "level": layout.level, "detail": layout.detail, "mode": summary.mode]
+                                "needsPermission": needsPermission, "level": layout.level, "detail": layout.detail, "mode": summary.mode,
+                                "width": layout.width, "budget": layout.budget]
         d["raw_itemIsVisible"] = item?.isVisible ?? NSNull()
         d["raw_windowExists"] = item?.button?.window != nil
         d["raw_windowIsVisible"] = item?.button?.window?.isVisible ?? NSNull()
@@ -533,7 +554,9 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
         if let v = view, let win = v.window {
             d["cells"] = layout.cells.map { c -> [String: Any] in
                 let r = Displays.axRect(win.convertToScreen(v.convert(c.rect, to: nil)))
-                return ["workspace": c.workspace, "x": r.x, "y": r.y, "w": r.w, "h": r.h]
+                var cell: [String: Any] = ["workspace": c.workspace, "x": r.x, "y": r.y, "w": r.w, "h": r.h]
+                if case .flat(let icons, let extra) = c.content { cell["icons"] = icons.count; cell["hidden"] = extra }
+                return cell
             }
         }
         return d

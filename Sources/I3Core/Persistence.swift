@@ -177,38 +177,58 @@ extension Tree {
 
     // MARK: - Reinsert (mid-session safety net)
 
-    /// Unlike `restore`, safe to call repeatedly against a tree that already has windows in it: whenever a
-    /// live window turns up that the tree does not currently know about (for any reason -- a transient
-    /// false "gone" verdict, a display fold, anything), this puts it back where the last saved snapshot
-    /// says it was, together with any of its former workspace-mates that are also still missing, instead
-    /// of leaving the caller to tile it fresh into whatever workspace happens to be focused right now --
-    /// which is what silently collapses windows that go missing and reappear into one flat row. A
-    /// workspace that is already fully intact in the live tree is left completely alone: only one that
-    /// actually gains a window this call has its saved layout/split orientation reapplied, so a workspace
-    /// nothing here concerns keeps whatever the user has since done to it live, even if that has drifted
-    /// from what was last saved.
+    /// Unlike `restore`, safe to call repeatedly against a tree that already has windows in it: puts windows
+    /// that were removed from the tree -- and have now turned up again -- back where `snapshot` (taken just
+    /// before they were removed) says they were, instead of leaving the caller to tile them fresh into
+    /// whatever workspace happens to be focused. Matching is by window ID only: mid-session the IDs are
+    /// stable, and matching by app and title as `restore` does would pull a brand-new window into the slot
+    /// of an existing one that merely has the same title (every new Terminal is "Terminal — login").
+    ///
+    /// A returning window whose saved parent still holds a live tiled sibling goes straight back next to it;
+    /// otherwise its saved subtree is rebuilt from the returning windows alone, at its saved position in the
+    /// workspace. A workspace that gains nothing is left completely alone.
     @discardableResult
     public func reinsert(from snapshot: TreeSnapshot, live: [LiveWindow]) -> Int {
-        var pool = live
+        var pool = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var restored = 0
 
-        func consume(_ id: WindowID?, _ appName: String?, _ title: String?) -> LiveWindow? {
-            if let id, let i = pool.firstIndex(where: { $0.id == id }) { return pool.remove(at: i) }
-            if let appName, let title, let i = pool.firstIndex(where: { $0.appName == appName && $0.title == title }) {
-                return pool.remove(at: i)
+        func take(_ id: WindowID?) -> LiveWindow? { id.flatMap { pool.removeValue(forKey: $0) } }
+
+        func leaf(_ node: TreeSnapshot.Node, _ w: LiveWindow) -> Con {
+            let con = Con(.window)
+            con.windowID = w.id
+            con.title = w.title
+            con.fullscreen = node.fullscreen
+            restored += 1
+            return con
+        }
+
+        /// Returning windows whose saved siblings include a live tiled window rejoin that window's container,
+        /// on the same side of it as before. Siblings placed earlier in this pass count as live too, so a
+        /// run of returning windows lines up in its saved order.
+        func rejoin(_ siblings: [TreeSnapshot.Node], in wsName: String) {
+            for (i, node) in siblings.enumerated() {
+                if node.layout != nil { rejoin(node.children, in: wsName); continue }
+                guard let id = node.windowID, pool[id] != nil else { continue }
+                let anchors = siblings.enumerated()
+                    .filter { $0.offset != i && $0.element.layout == nil }
+                    .sorted { abs($0.offset - i) < abs($1.offset - i) }
+                for (j, s) in anchors {
+                    guard let sid = s.windowID, pool[sid] == nil, let anchor = find(sid), !anchor.isFloating,
+                          anchor.workspace?.name == wsName, let parent = anchor.parent, let at = anchor.indexInParent,
+                          let w = take(id) else { continue }
+                    parent.attach(leaf(node, w), at: j < i ? at + 1 : at)
+                    parent.fixPercent()
+                    break
+                }
             }
-            return nil
         }
 
         func build(_ node: TreeSnapshot.Node) -> Con? {
             guard let layout = node.layout else {
-                guard let w = consume(node.windowID, node.appName, node.title) else { return nil }
-                let con = Con(.window)
-                con.windowID = w.id
-                con.title = w.title
+                guard let w = take(node.windowID) else { return nil }
+                let con = leaf(node, w)
                 con.percent = node.percent
-                con.fullscreen = node.fullscreen
-                restored += 1
                 return con
             }
             let kids = node.children.compactMap(build)
@@ -229,6 +249,12 @@ extension Tree {
         }
 
         for savedOut in snapshot.outputs {
+            for savedWs in savedOut.workspaces where workspace(named: savedWs.name) != nil {
+                rejoin(savedWs.nodes, in: savedWs.name)
+            }
+        }
+
+        for savedOut in snapshot.outputs {
             guard !pool.isEmpty else { break }
             guard let out = matchOutput(savedOut) else { continue }
             for savedWs in savedOut.workspaces {
@@ -236,11 +262,11 @@ extension Tree {
                 let existed = workspace(named: savedWs.name) != nil
                 let ws = workspace(named: savedWs.name) ?? createWorkspace(savedWs.name, on: out)
                 var gained = false
-                for node in savedWs.nodes {
-                    if let con = build(node) { ws.attach(con); gained = true }
+                for (i, node) in savedWs.nodes.enumerated() {
+                    if let con = build(node) { ws.attach(con, at: min(i, ws.children.count)); gained = true }
                 }
                 for f in savedWs.floating {
-                    guard let w = consume(f.windowID, f.appName, f.title) else { continue }
+                    guard let w = take(f.windowID) else { continue }
                     let con = Con(.window)
                     con.windowID = w.id
                     con.title = w.title
