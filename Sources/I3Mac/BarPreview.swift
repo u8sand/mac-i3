@@ -6,7 +6,11 @@ import I3Core
 
 /// `mac-i3 bar-preview <file.png> [dark] [flat]`: renders a sample workspace bar offscreen (no daemon needed).
 public enum BarPreview {
-    public static func write(to path: String, dark: Bool, layout: String, crowded: Bool = false) -> Bool {
+    /// `budget`: the room to fit in (default: the 600pt cap). `mine`: a single display with ws 1 code, 2 t[code code],
+    /// 3 code, 4 slack v[chrome chrome], 10 vpn-like — a real crowded-menu-bar case.
+    public static func write(to path: String, dark: Bool, layout: String, crowded: Bool = false,
+                             budget: CGFloat? = nil, mine: Bool = false) -> Bool {
+        if mine { return writeMine(to: path, dark: dark, layout: layout, budget: budget) }
         let t = Tree(outputs: [("display-1", Rect(0, 0, 1800, 1100)), ("display-2", Rect(1800, 0, 1920, 1080))])
         t.setOutputLabels([:], primary: "display-1")
         // Workspace 1, the example h[chrome term] t[chrome v[chrome chrome]]
@@ -47,7 +51,31 @@ public enum BarPreview {
         var info: [WindowID: BarWindowInfo] = [:]
         for (id, p) in owners { info[id] = BarWindowInfo(title: "", pid: p, appName: NSRunningApplication(processIdentifier: p)?.localizedName ?? "") }
 
-        guard let r = WorkspaceBarController.render(t.barSummary(mode: dark ? "resize" : "default"), info: info, dark: dark, layout: layout),
+        return save(t, info: info, to: path, dark: dark, layout: layout, budget: budget, mode: dark ? "resize" : "default")
+    }
+
+    private static func writeMine(to path: String, dark: Bool, layout: String, budget: CGFloat?) -> Bool {
+        let t = Tree(outputs: [("display-1", Rect(0, 0, 1800, 1130))])
+        t.setOutputLabels([:], primary: "display-1")
+        t.run("workspace 2"); t.addWindow(21); t.addWindow(22); t.run("layout tabbed")
+        t.run("workspace 3"); t.addWindow(31)
+        t.run("workspace 4"); t.addWindow(41); t.addWindow(42); t.run("split v"); t.addWindow(43)
+        t.run("workspace 10"); t.addWindow(101)
+        t.run("workspace 1"); t.addWindow(11)
+        func pid(_ n: String) -> pid_t {
+            NSWorkspace.shared.runningApplications.first { $0.localizedName == n && $0.activationPolicy == .regular }?.processIdentifier
+                ?? NSRunningApplication.current.processIdentifier
+        }
+        let code = pid("Code"), chrome = pid("Google Chrome"), slack = pid("Slack"), vpn = pid("F5 VPN")
+        let owners: [WindowID: pid_t] = [11: code, 21: code, 22: code, 31: code, 41: slack, 42: chrome, 43: chrome, 101: vpn]
+        var info: [WindowID: BarWindowInfo] = [:]
+        for (id, p) in owners { info[id] = BarWindowInfo(title: "", pid: p, appName: NSRunningApplication(processIdentifier: p)?.localizedName ?? "") }
+        return save(t, info: info, to: path, dark: dark, layout: layout, budget: budget, mode: "default")
+    }
+
+    private static func save(_ t: Tree, info: [WindowID: BarWindowInfo], to path: String, dark: Bool, layout: String,
+                             budget: CGFloat?, mode: String) -> Bool {
+        guard let r = WorkspaceBarController.render(t.barSummary(mode: mode), info: info, dark: dark, layout: layout, budget: budget),
               let png = r.rep.representation(using: .png, properties: [:]) else { return false }
         print("width \(Int(r.width))pt; \(r.detail)")
         do { try png.write(to: URL(fileURLWithPath: path)); return true } catch { return false }

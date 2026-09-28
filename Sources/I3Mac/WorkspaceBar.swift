@@ -22,7 +22,7 @@ enum BarToken {
 /// How much a workspace cell shows.
 enum CellDetail: Equatable {
     case tree               // the container tree with layout letters, brackets and one icon per window
-    case flat(Int)          // up to N app icons (one per app), no structure
+    case flat(Int, count: Bool)   // up to N app icons (one per app), no structure; "+N" for the other windows
     case none               // just the number
 }
 
@@ -215,11 +215,26 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     /// The widest the bar may get: what the menu bar actually has free (macOS hides a status item outright
     /// rather than squeezing it, so a bar that outgrows the room vanishes — with many windows, it did), and
     /// never more than a third of the screen.
+    /// Offscreen previews only: a fixed room instead of measuring the live menu bar.
+    private var budgetOverride: CGFloat?
+    private var itemPadding: CGFloat = 16
+    private var paddingCandidate: CGFloat?
     private var budget: CGFloat {
+        if let budgetOverride { return budgetOverride }
         let cap = min(600, (NSScreen.screens.first?.frame.width ?? 1500) * 0.33)
-        guard let room = Displays.menuBarRoom(ownWindow: item?.button?.window?.windowNumber, ownFrame: screenFrame()?.rect)
+        let own = screenFrame()
+        guard let room = Displays.menuBarRoom(ownWindow: item?.button?.window?.windowNumber, ownFrame: own?.rect)
         else { return cap }
-        return max(0, min(cap, CGFloat(room) - 4))
+        // The item is drawn wider than its content (macOS pads it). Mid-resize its frame and the last layout disagree
+        // for a moment, so a new measurement is adopted only once two readings in a row agree.
+        if let own, own.visible, layout.width > 0 {
+            let p = CGFloat(own.rect.w) - layout.width
+            if p >= 0, p <= 40 {
+                if let c = paddingCandidate, abs(c - p) < 1 { itemPadding = p }
+                paddingCandidate = p
+            }
+        }
+        return max(0, min(cap, CGFloat(room) - itemPadding - 4))
     }
 
     /// Re-measures the room in the menu bar and lays the bar out again to fit it (other status items come
@@ -298,27 +313,27 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
         return out
     }
 
-    /// Fallback chain, most detail first: each step gives (inactive workspaces, showing workspaces).
-    private func chain() -> [(inactive: CellDetail, showing: CellDetail)] {
-        var c: [(inactive: CellDetail, showing: CellDetail)] = layoutMode == "flat"
-            ? [(.flat(3), .flat(3)), (.none, .flat(3)), (.none, .flat(2)), (.none, .none)]
-            : [(.tree, .tree), (.flat(3), .tree), (.none, .tree), (.none, .flat(3)), (.none, .flat(2)), (.none, .none)]
-        switch iconMode {
-        case "none": c = [c[c.count - 1]]
-        case "active": c = c.filter { $0.inactive == .none }
-        default: break
-        }
-        return c
+    /// How one workspace's cell gives up detail, most first. Showing workspaces keep their icons longest.
+    private func ladder(showing: Bool) -> [CellDetail] {
+        if iconMode == "none" || (!showing && iconMode == "active") { return [.none] }
+        let icons: [CellDetail] = showing
+            ? [.flat(3, count: true), .flat(2, count: true), .flat(1, count: false)]
+            : [.flat(3, count: true), .flat(2, count: true), .flat(1, count: true), .flat(1, count: false)]
+        return (layoutMode == "flat" ? [] : [.tree]) + icons + [.none]
     }
 
     private func describe(_ d: CellDetail) -> String {
-        switch d { case .tree: return "tree"; case .flat(let n): return "icons(\(n))"; case .none: return "number" }
+        switch d {
+        case .tree: return "tree"
+        case .flat(let n, let count): return "icons(\(n)\(count ? "" : ", no count"))"
+        case .none: return "number"
+        }
     }
 
-    private func makeLayout(step: (inactive: CellDetail, showing: CellDetail), level: Int) -> BarLayout {
+    private func makeLayout(details: [String: CellDetail], level: Int) -> BarLayout {
         var l = BarLayout()
         l.level = level
-        l.detail = "inactive: \(describe(step.inactive)), showing: \(describe(step.showing))"
+        l.detail = summary.outputs.flatMap(\.workspaces).map { "\($0.name): \(describe(details[$0.name] ?? .none))" }.joined(separator: ", ")
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         let small = NSFont.systemFont(ofSize: 10, weight: .medium)
         let h = WorkspaceBarController.height
@@ -330,22 +345,22 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
                 let textW = (ws.name as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
                 var w = pad + textW
                 var content = CellContent.none
-                var detail = (ws.showing || ws.focused) ? step.showing : step.inactive
+                var detail = details[ws.name] ?? .none
                 if case .tree = detail, ws.windows.isEmpty { detail = .none }
                 if case .tree = detail {
                     if let toks = tokens(for: ws) {
                         content = .tree(toks)
                         w += 5 + WorkspaceBarController.treeWidth(toks)
                     } else {
-                        detail = .flat(3)          // too many windows for a tree: icons only
+                        detail = .flat(3, count: true)          // too many windows for a tree: icons only
                     }
                 }
-                if case .flat(let limit) = detail {
+                if case .flat(let limit, let count) = detail {
                     let all = icons(for: ws)
                     let shown = Array(all.prefix(limit))
                     if !shown.isEmpty {
                         // Windows, not apps: "+N" is how many of the workspace's windows have no icon of their own.
-                        let extra = ws.windows.count - shown.count
+                        let extra = count ? ws.windows.count - shown.count : 0
                         content = .flat(shown.map { $0.0 }, extra: extra)
                         w += 4 + CGFloat(shown.count) * 15 + CGFloat(shown.count - 1) * 2
                         if extra > 0 { w += ("+\(extra)" as NSString).size(withAttributes: [.font: small]).width + 3 }
@@ -368,13 +383,29 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
         return l
     }
 
-    /// The most detailed step of the fallback chain that fits the budget (the last one if none does).
+    /// Full detail, then — while the bar is too wide for the menu bar — one workspace at a time steps down its
+    /// ladder, the widest cell first: inactive workspaces all the way before a showing one gives anything up.
+    /// `level` counts the steps taken.
     private func computeLayout() -> BarLayout {
-        let steps = chain()
         let limit = budget
-        var chosen = makeLayout(step: steps[0], level: 0)
-        for (i, step) in steps.enumerated().dropFirst() where chosen.width > limit {
-            chosen = makeLayout(step: step, level: i)
+        let workspaces = summary.outputs.flatMap(\.workspaces)
+        let isShowing = Dictionary(workspaces.map { ($0.name, $0.showing || $0.focused) }, uniquingKeysWith: { a, _ in a })
+        var rung: [String: Int] = [:]
+        func details() -> [String: CellDetail] {
+            isShowing.reduce(into: [:]) { d, e in d[e.key] = ladder(showing: e.value)[rung[e.key] ?? 0] }
+        }
+        var level = 0
+        var chosen = makeLayout(details: details(), level: 0)
+        for showing in [false, true] {
+            while chosen.width > limit {
+                let candidates = chosen.cells.filter {
+                    isShowing[$0.workspace] == showing && (rung[$0.workspace] ?? 0) < ladder(showing: showing).count - 1
+                }
+                guard let widest = candidates.max(by: { $0.rect.width < $1.rect.width }) else { break }
+                rung[widest.workspace, default: 0] += 1
+                level += 1
+                chosen = makeLayout(details: details(), level: level)
+            }
         }
         chosen.budget = limit
         return chosen
@@ -496,11 +527,13 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     // MARK: - Offscreen preview (mac-i3 bar-preview)
 
     /// Renders the bar for a summary into an image without a status item, using the real layout and drawing code.
-    static func render(_ summary: BarSummary, info: [WindowID: BarWindowInfo], dark: Bool, layout: String = "tree") -> (rep: NSBitmapImageRep, detail: String, width: CGFloat)? {
+    static func render(_ summary: BarSummary, info: [WindowID: BarWindowInfo], dark: Bool, layout: String = "tree",
+                       budget: CGFloat? = nil) -> (rep: NSBitmapImageRep, detail: String, width: CGFloat)? {
         let c = WorkspaceBarController()
         c.summary = summary
         c.info = info
         c.layoutMode = layout
+        c.budgetOverride = budget ?? 600
         let lay = c.computeLayout()
         let v = BarView()
         v.controller = c

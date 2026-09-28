@@ -17,7 +17,8 @@ USAGE
   mac-i3 tree                 JSON dump of the container tree
   mac-i3 state                JSON dump of workspaces, shapes and the OS-reported window frames
   mac-i3 shape                One-line tree shape per output
-  mac-i3 bar-preview <file.png> [dark] [flat] [crowded]   Render a sample workspace bar offscreen (no daemon)
+  mac-i3 bar-preview <file.png> [dark] [flat] [crowded] [mine] [budget=<points>]
+                                          Render a sample workspace bar offscreen (no daemon)
   mac-i3 outputs              List displays with the numbers to use in `workspace N output <number>`
   mac-i3 modifiers            Show which modifier keys macOS thinks are held (should be none)
   mac-i3 release-modifiers    Clear stuck modifier keys
@@ -108,9 +109,12 @@ case "render-icon":
     } else if !AppIcon.writeIconset(to: out) { fail("could not write \(out)") }
 case "bar-preview":
     // Developer aid: render a sample workspace bar to a PNG without a daemon.
-    guard let path = args.first(where: { !["dark", "flat", "crowded"].contains($0) }) else { fail("usage: mac-i3 bar-preview <file.png> [dark] [flat] [crowded]") }
+    let budget = args.first { $0.hasPrefix("budget=") }.flatMap { Double($0.dropFirst(7)) }.map { CGFloat($0) }
+    guard let path = args.first(where: { !["dark", "flat", "crowded", "mine"].contains($0) && !$0.hasPrefix("budget=") })
+    else { fail("usage: mac-i3 bar-preview <file.png> [dark] [flat] [crowded] [mine] [budget=<points>]") }
     NSApplication.shared.setActivationPolicy(.prohibited)
-    exit(BarPreview.write(to: path, dark: args.contains("dark"), layout: args.contains("flat") ? "flat" : "tree", crowded: args.contains("crowded")) ? 0 : 1)
+    exit(BarPreview.write(to: path, dark: args.contains("dark"), layout: args.contains("flat") ? "flat" : "tree",
+                          crowded: args.contains("crowded"), budget: budget, mine: args.contains("mine")) ? 0 : 1)
 case "outputs":
     // The numbers to use in `workspace N output <number>` (a display name, or part of its product name, also works).
     for o in Displays.listing() {

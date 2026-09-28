@@ -72,7 +72,10 @@ public enum Displays {
             guard let d = w[kCGWindowBounds as String] as? NSDictionary, let b = CGRect(dictionaryRepresentation: d),
                   b.minY <= 1, b.minX >= left - 1, b.maxX <= width + 2 else { continue }
             if let n = w[kCGWindowNumber as String] as? Int, n == ownWindow { continue }
-            if let own = ownFrame, abs(b.minX - own.x) < 2, abs(b.width - own.w) < 2 { continue }
+            // Ours is whatever overlaps our own frame. Not an exact match: right after the bar resizes, the window
+            // server still reports its old bounds for a moment, and counting ourselves as another item then halved
+            // the room and briefly stripped every icon each time a window opened or closed.
+            if let own = ownFrame, own.w > 0, b.minX < own.maxX - 1, b.maxX > own.x + 1 { continue }
             used += b.width
         }
         return max(0, width - left - used)
