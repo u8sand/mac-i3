@@ -246,10 +246,7 @@ extension Tree {
                 moveAcrossOutput(con, dir)
                 return
             }
-            let x = encapsulate(ws)
-            ws.layout = .split(o)
-            ws.lastSplit = ws.layout
-            relocate(con, near: x, after: dir.isForward)
+            wrapWorkspace(ws, leaving: con, dir)
             return
         }
         let i = above.indexInParent!
@@ -274,12 +271,32 @@ extension Tree {
             }
             return
         }
-        // Edge of `s`: leave it.
+        // Edge of `s`: leave it, to the side of `s` in the nearest container above it that runs along this axis.
         if s.kind == .workspace {
-            moveAcrossOutput(con, dir)
-        } else {
-            relocate(con, near: s, after: dir.isForward)
+            // A tabbed or stacked workspace is a group like any other: with no display that way, step out of it.
+            if s.layout.isTabLike, adjacentOutput(of: activeOutput, dir) == nil, s.children.count > 1 {
+                wrapWorkspace(s, leaving: con, dir)
+            } else {
+                moveAcrossOutput(con, dir)
+            }
+            return
         }
+        var outer = s
+        while let p = outer.parent, p.kind != .workspace, p.layout.orientation != o { outer = p }
+        if let p = outer.parent, p.layout.orientation == o {
+            relocate(con, near: outer, after: dir.isForward)
+        } else if let ws = con.workspace {
+            wrapWorkspace(ws, leaving: con, dir)
+        }
+    }
+
+    /// Wrap the workspace's content in a container and lay the workspace out along `dir`, with `con` taken out
+    /// of that content and put beside it.
+    func wrapWorkspace(_ ws: Con, leaving con: Con, _ dir: Direction) {
+        let x = encapsulate(ws)
+        ws.layout = .split(dir.orientation)
+        ws.lastSplit = ws.layout
+        relocate(con, near: x, after: dir.isForward)
     }
 
     /// Detach `con` and re-attach it next to `anchor` in anchor's parent. The new spot is filled before the
@@ -351,8 +368,15 @@ extension Tree {
             focus(con)
             noteWorkspaceChange(from: from)
         } else {
+            // As in i3: the window just moved becomes the one focused *within* the target workspace, so switching
+            // there afterwards lands on it. Only that workspace's own recency changes, not which one is showing.
+            var c = con
+            while let p = c.parent, p !== target.parent {
+                p.focusOrder.removeAll { $0 === c }
+                p.focusOrder.insert(c, at: 0)
+                c = p
+            }
             focus(descendFocused(from))
-            // keep the recency chain of the target untouched
         }
         pruneEmptyWorkspaces()
     }

@@ -97,16 +97,17 @@ extension WindowManager {
     func finish(_ g: Gesture, end: (x: Double, y: Double)) {
         lastMouseActivity = Date()
         var touched: [WindowID] = []
-        if let id = g.interior {
-            // Pressed inside a window: a move. The size afterwards is ignored on purpose.
-            if let before = g.baseline[id], let w = wins[id], let after = AX.frame(w.element), displaced(before, after) {
-                log("mouse: move \(id) to \(Int(end.x)),\(Int(end.y))")
-                drop(id, at: end)
-                touched.append(id)
-            }
+        if let id = g.interior, let before = g.baseline[id], let w = wins[id], let after = AX.frame(w.element),
+           displaced(before, after) {
+            // Pressed inside a window and it moved: a move. The size afterwards is ignored on purpose.
+            log("mouse: move \(id) to \(Int(end.x)),\(Int(end.y))")
+            drop(id, at: end)
+            touched.append(id)
         } else {
-            // Pressed on a border: a resize of whichever neighbour actually changed size.
-            for id in g.borders {
+            // Otherwise a resize of whichever window actually changed size. That includes the "interior" one: a
+            // neighbour that would not shrink to its slot (an app's minimum width) overlaps the edge being
+            // grabbed, so the press lands inside it — and ignoring it then snapped every resize there back.
+            for id in g.borders + (g.interior.map { [$0] } ?? []) {
                 guard let before = g.baseline[id], let w = wins[id], let after = AX.frame(w.element) else { continue }
                 let d = EdgeDeltas(from: before, to: after)
                 guard abs(after.w - before.w) > 8 || abs(after.h - before.h) > 8 else { continue }

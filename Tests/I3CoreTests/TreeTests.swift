@@ -185,6 +185,21 @@ func frames(_ t: Tree) -> [WindowID: Rect] { t.computeLayout().frames }
         #expect(t.activeShape == "T[1 3* 2]")
     }
 
+    @Test func movingRightOutOfATabbedWorkspaceLeavesTheTabs() {
+        let t = makeTree([1, 2, 3])
+        t.run("layout tabbed")                          // the workspace itself is tabbed: T[1 2 3*]
+        t.run("move right")                             // last tab, no display to the right
+        #expect(t.activeShape == "H[T[1 2] 3*]")
+    }
+
+    @Test func movingOutOfATabGroupGoesBesideItNotIntoAPerpendicularParent() {
+        let t = makeTree([1, 2, 3])
+        t.run("move down")                              // V[H[1 2] 3*]
+        t.run("focus up"); t.run("layout tabbed")       // V[T[1 2*] 3]
+        t.run("move right")                             // last tab of a group inside a vertical split
+        #expect(t.activeShape == "H[V[T[1] 3] 2*]")    // to the right of it all, not dropped below the tabs
+    }
+
     @Test func moveSingleWindowIsNoop() {
         let t = makeTree([1])
         t.run("move left"); t.run("move up")
@@ -270,6 +285,17 @@ func frames(_ t: Tree) -> [WindowID: Rect] { t.computeLayout().frames }
         for _ in 0..<20 { t.run("resize grow width 10 px or 10 ppt") }
         let f = frames(t)
         #expect(f[1]!.w >= 50)
+    }
+}
+
+@Suite struct MovingToAWorkspace {
+    @Test func theMovedWindowIsFocusedThereWhenYouFollow() {
+        let t = makeTree([1, 2])
+        t.run("workspace 2"); t.addWindow(3); t.addWindow(4)   // ws 2: H[3 4*]
+        t.run("workspace 1"); t.run("focus left")              // window 1
+        t.run("move container to workspace 2")
+        t.run("workspace 2")
+        #expect(t.focusedWindowID == 1)
     }
 }
 
