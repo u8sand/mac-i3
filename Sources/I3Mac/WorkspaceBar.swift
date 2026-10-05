@@ -88,19 +88,23 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
 
     // MARK: - Configuration & updates
 
-    /// `glyphWhenDisabled`: with `workspace_bar no`, still show a small glyph so the app can be reached from the
-    /// menu bar (true for the .app, false for command-line runs, which have a terminal to quit from).
-    func configure(enabled: Bool, icons: String, layout: String, glyphWhenDisabled: Bool) {
+    /// `glyphWhenDisabled`: when the workspace list is not in the menu bar (`workspace_bar no`, or a `top`/`bottom`
+    /// bar), still show a small glyph there so the app menu can be reached (true for the .app, false for
+    /// command-line runs, which have a terminal to quit from).
+    func configure(enabled: Bool, icons: String, layout: String, position: String, glyphWhenDisabled: Bool) {
         iconMode = icons
         layoutMode = layout
         barEnabled = enabled
+        self.position = position
         self.glyphWhenDisabled = glyphWhenDisabled
         refreshPresence()
+        refreshPanels()
     }
 
     func setNeedsPermission(_ needs: Bool) {
         needsPermission = needs
         refreshPresence()
+        refreshPanels()
     }
 
     func update(_ s: BarSummary, info i: [WindowID: BarWindowInfo]) {
@@ -108,6 +112,40 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
         summary = s
         info = i
         if showsBar { relayout() }
+        refreshPanels()
+    }
+
+    // MARK: - Bars of their own (`workspace_bar_position top|bottom`)
+
+    static let panelHeight: CGFloat = 22   // the tab bars' height (Tree.tabBarHeight), so the two line up
+    private var position = "menubar"
+    /// The workspace list lives in bars along a display edge rather than in the menu bar.
+    var usesPanels: Bool { position == "top" || position == "bottom" }
+    private var panels: [String: WorkspacePanel] = [:]
+    /// Where each display's bar goes (AX coordinates), by output name; set by the daemon.
+    private var panelFrames: [String: Rect] = [:]
+
+    func setPanelFrames(_ frames: [String: Rect]) {
+        guard frames != panelFrames else { return }
+        panelFrames = frames
+        refreshPanels()
+    }
+
+    /// One bar per display, each listing that display's workspaces with the same drawing as the menu bar item.
+    private func refreshPanels() {
+        let show = usesPanels && barEnabled && !needsPermission
+        var live = Set<String>()
+        if show {
+            for out in summary.outputs {
+                guard let r = panelFrames[out.name] else { continue }
+                let panel = panels[out.name] ?? WorkspacePanel(controller: self)
+                panels[out.name] = panel
+                let mine = BarSummary(outputs: [out], mode: summary.mode)
+                panel.show(computeLayout(mine, budget: CGFloat(r.w) - 8), frame: r)
+                live.insert(out.name)
+            }
+        }
+        for (name, panel) in panels where !live.contains(name) { panel.orderOut(nil) }
     }
 
     func remove() {
@@ -135,7 +173,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     /// consecutive bad readings, spaced apart by the caller) so a single frame drawn mid-transition, before macOS
     /// has finished laying out the menu bar, does not trigger a needless rebuild.
     func verifyPresence() {
-        let shouldShowSomething = barEnabled || needsPermission || glyphWhenDisabled
+        let shouldShowSomething = (barEnabled && !usesPanels) || needsPermission || glyphWhenDisabled
         guard shouldShowSomething else { unhealthyStreak = 0; return }
         refit()   // the room may have shrunk since the last layout: a bar too wide for it is not shown at all
         let healthy: Bool
@@ -161,12 +199,13 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
         refreshPresence()
     }
 
-    /// The workspace list is showing (as opposed to just the glyph, or nothing).
-    private var showsBar: Bool { item != nil && barEnabled && !needsPermission }
+    /// The workspace list is showing in the menu bar (as opposed to just the glyph, or nothing).
+    private var showsBar: Bool { item != nil && barEnabled && !needsPermission && !usesPanels }
 
     /// Decide what the menu bar item is right now: the workspace list, the glyph, or nothing.
     private func refreshPresence() {
-        let wantsGlyph = needsPermission || (!barEnabled && glyphWhenDisabled)
+        let wantsGlyph = needsPermission || ((!barEnabled || usesPanels) && glyphWhenDisabled)
+        if usesPanels && !wantsGlyph { remove(); return }
         guard barEnabled || wantsGlyph else { remove(); return }
         install()
         guard let item, let button = item.button else { return }
@@ -218,13 +257,19 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     /// Offscreen previews only: a fixed room instead of measuring the live menu bar.
     private var budgetOverride: CGFloat?
     private var itemPadding: CGFloat = 16
+    private var lastRoom: Double?
     private var paddingCandidate: CGFloat?
     private var budget: CGFloat {
         if let budgetOverride { return budgetOverride }
         let cap = min(600, (NSScreen.screens.first?.frame.width ?? 1500) * 0.33)
         let own = screenFrame()
-        guard let room = Displays.menuBarRoom(ownWindow: item?.button?.window?.windowNumber, ownFrame: own?.rect)
-        else { return cap }
+        // A hidden item's frame is meaningless; and on macOS 27 it is the only thing to measure with, so while
+        // hidden the last good reading stands in (otherwise a bar hidden for being too wide could never shrink back).
+        if let measured = Displays.menuBarRoom(ownWindow: item?.button?.window?.windowNumber,
+                                               ownFrame: own?.visible == true ? own?.rect : nil) {
+            lastRoom = measured
+        }
+        guard let room = lastRoom else { return cap }
         // The item is drawn wider than its content (macOS pads it). Mid-resize its frame and the last layout disagree
         // for a moment, so a new measurement is adopted only once two readings in a row agree.
         if let own, own.visible, layout.width > 0 {
@@ -330,7 +375,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    private func makeLayout(details: [String: CellDetail], level: Int) -> BarLayout {
+    private func makeLayout(_ summary: BarSummary, details: [String: CellDetail], level: Int) -> BarLayout {
         var l = BarLayout()
         l.level = level
         l.detail = summary.outputs.flatMap(\.workspaces).map { "\($0.name): \(describe(details[$0.name] ?? .none))" }.joined(separator: ", ")
@@ -386,8 +431,9 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     /// Full detail, then — while the bar is too wide for the menu bar — one workspace at a time steps down its
     /// ladder, the widest cell first: inactive workspaces all the way before a showing one gives anything up.
     /// `level` counts the steps taken.
-    private func computeLayout() -> BarLayout {
-        let limit = budget
+    private func computeLayout() -> BarLayout { computeLayout(summary, budget: budget) }
+
+    private func computeLayout(_ summary: BarSummary, budget limit: CGFloat) -> BarLayout {
         let workspaces = summary.outputs.flatMap(\.workspaces)
         let isShowing = Dictionary(workspaces.map { ($0.name, $0.showing || $0.focused) }, uniquingKeysWith: { a, _ in a })
         var rung: [String: Int] = [:]
@@ -395,7 +441,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
             isShowing.reduce(into: [:]) { d, e in d[e.key] = ladder(showing: e.value)[rung[e.key] ?? 0] }
         }
         var level = 0
-        var chosen = makeLayout(details: details(), level: 0)
+        var chosen = makeLayout(summary, details: details(), level: 0)
         for showing in [false, true] {
             while chosen.width > limit {
                 let candidates = chosen.cells.filter {
@@ -404,7 +450,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
                 guard let widest = candidates.max(by: { $0.rect.width < $1.rect.width }) else { break }
                 rung[widest.workspace, default: 0] += 1
                 level += 1
-                chosen = makeLayout(details: details(), level: level)
+                chosen = makeLayout(summary, details: details(), level: level)
             }
         }
         chosen.budget = limit
@@ -584,6 +630,12 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
             d["frame"] = ["x": f.rect.x, "y": f.rect.y, "w": f.rect.w, "h": f.rect.h]
             d["visible"] = f.visible
         }
+        d["position"] = position
+        d["panels"] = panels.filter { $0.value.isVisible }.sorted { $0.key < $1.key }.map { name, p -> [String: Any] in
+            let f = Displays.axRect(p.frame)
+            return ["output": name, "x": f.x, "y": f.y, "w": f.w, "h": f.h,
+                    "workspaces": p.barView.layoutData.cells.map(\.workspace), "detail": p.barView.layoutData.detail]
+        }
         if let v = view, let win = v.window {
             d["cells"] = layout.cells.map { c -> [String: Any] in
                 let r = Displays.axRect(win.convertToScreen(v.convert(c.rect, to: nil)))
@@ -596,23 +648,63 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     }
 }
 
-/// The custom-drawn content of the status item.
+/// A bar of its own along the top or bottom of a display: a borderless panel that never takes focus (like the
+/// tab bars), on every Space but not over fullscreen apps, drawn by the same view as the menu bar item.
+private final class WorkspacePanel: NSPanel {
+    let barView = BarView()
+
+    init(controller: WorkspaceBarController) {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        isOpaque = true
+        hasShadow = false
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+        barView.controller = controller
+        barView.tabStyle = true
+        contentView = barView
+    }
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    func show(_ layout: BarLayout, frame r: Rect) {
+        barView.layoutData = layout
+        let primaryH = NSScreen.screens.first?.frame.height ?? 0
+        let frame = NSRect(x: r.x, y: primaryH - r.maxY, width: r.w, height: r.h)
+        if self.frame != frame { setFrame(frame, display: false) }
+        barView.needsDisplay = true
+        orderFrontRegardless()
+    }
+}
+
+/// The custom-drawn content of the status item, of a display's own bar, and of offscreen previews.
 private final class BarView: NSView {
     weak var controller: WorkspaceBarController?
     var layoutData = BarLayout()
-    /// Only for offscreen previews: the menu bar colour to draw on.
+    /// What to draw on (none in the menu bar, which has its own).
     var backdrop: NSColor?
+    /// A display's own bar: drawn like the tab bars (i3's colours, square bordered cells, full height).
+    var tabStyle = false
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     private func cellRect(_ c: BarCell) -> NSRect {
-        NSRect(x: c.rect.minX, y: (bounds.height - c.rect.height) / 2, width: c.rect.width, height: c.rect.height)
+        if tabStyle { return NSRect(x: c.rect.minX, y: 0, width: c.rect.width, height: bounds.height) }
+        return NSRect(x: c.rect.minX, y: (bounds.height - c.rect.height) / 2, width: c.rect.width, height: c.rect.height)
+    }
+
+    /// i3's default colours, as the tab bars use them: focused / focused_inactive / unfocused.
+    private static func i3(_ hex: Int) -> NSColor {
+        NSColor(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1)
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if let backdrop { backdrop.setFill(); bounds.fill() }
+        if tabStyle { BarView.i3(0x222222).setFill(); bounds.fill() }
+        else if let backdrop { backdrop.setFill(); bounds.fill() }
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         let small = NSFont.systemFont(ofSize: 10, weight: .medium)
         for x in layoutData.dividers {
@@ -622,7 +714,13 @@ private final class BarView: NSView {
         for c in layoutData.cells {
             let r = cellRect(c)
             var text = NSColor.labelColor.withAlphaComponent(0.75)
-            if c.focused {
+            if tabStyle {
+                let (bg, border, fg) = c.focused ? (0x285577, 0x4c7899, 0xffffff)
+                    : c.showing ? (0x5f676a, 0x333333, 0xffffff) : (0x222222, 0x333333, 0x888888)
+                BarView.i3(bg).setFill(); r.fill()
+                BarView.i3(border).setStroke(); NSBezierPath(rect: r.insetBy(dx: 0.5, dy: 0.5)).stroke()
+                text = BarView.i3(fg)
+            } else if c.focused {
                 NSColor.controlAccentColor.setFill()
                 NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5).fill()
                 text = .white

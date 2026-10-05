@@ -45,6 +45,9 @@ public struct Config {
     public var workspaceBarIcons = "all"
     /// `tree`: draw each workspace's containers as i3-style `h[icon icon]`; `flat`: just the app icons.
     public var workspaceBarLayout = "tree"
+    /// `menubar`: an item in the macOS menu bar (only as wide as the room left there). `top` / `bottom`: a bar of
+    /// its own along that edge of every display, showing that display's workspaces; the windows tile around it.
+    public var workspaceBarPosition = "menubar"
     /// `mouse_warping none|output|window|center`: when the cursor follows keyboard focus (raw value of I3Core.WarpMode).
     public var mouseWarping = "window"
     /// `workspace <name> output <spec>...`: preferred outputs per workspace, most preferred first.

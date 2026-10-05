@@ -118,6 +118,9 @@ public enum ConfigParser {
             case "workspace_bar_layout":
                 if ["tree", "flat"].contains(rest) { cfg.workspaceBarLayout = rest }
                 else { errors.append("line \(lineNo): workspace_bar_layout must be tree or flat") }
+            case "workspace_bar_position":
+                if ["menubar", "top", "bottom"].contains(rest) { cfg.workspaceBarPosition = rest }
+                else { errors.append("line \(lineNo): workspace_bar_position must be menubar, top or bottom") }
             case "mouse_warping":
                 if ["none", "output", "window", "center"].contains(rest) { cfg.mouseWarping = rest }
                 else { errors.append("line \(lineNo): mouse_warping must be none, output, window or center") }

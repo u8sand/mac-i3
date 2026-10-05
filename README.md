@@ -139,7 +139,7 @@ edges* (System Settings → Desktop & Dock → Windows) so it does not compete w
 
 `~/.config/mac-i3/config` uses i3 syntax (`mac-i3 default-config` prints the built-in one):
 `set`, `bindsym` (incl. `--release`), `mode "name" { ... }`, `exec`, `gaps inner|outer N`,
-`focus_wrapping`, `workspace_bar yes|no`, `workspace_bar_icons all|active|none`, `workspace_bar_layout tree|flat`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
+`focus_wrapping`, `workspace_bar yes|no`, `workspace_bar_icons all|active|none`, `workspace_bar_layout tree|flat`, `workspace_bar_position menubar|top|bottom`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
 Keys are physical (layout independent).
 
 ### Window rules
@@ -191,9 +191,15 @@ A menu bar item lists your workspaces, so you can always see where you are:
 workspace_bar yes|no                 # default yes
 workspace_bar_icons all|active|none  # default all: detail everywhere (dropped when crowded); active: only on showing workspaces
 workspace_bar_layout tree|flat       # default tree: h[icon icon] structure; flat: just the app icons
+workspace_bar_position menubar|top|bottom  # default menubar; top/bottom: a bar of its own on every display
 ```
 
-`mac-i3 bar-preview out.png [dark] [flat] [crowded]` renders a sample bar offscreen (no daemon needed), and `mac-i3 bar` prints what the bar shows (including each workspace's layout as text, with app names) and where it is on screen, and `mac-i3 doctor` warns if macOS is hiding
+With `workspace_bar_position top` or `bottom` the list gets a bar of its own along that edge of every display
+(each showing that display's workspaces, windows tiling around it), so it is never squeezed by the menu bar;
+the packaged app keeps a small menu bar glyph for its menu. `menubar` puts it in the macOS menu bar, which
+only gives it the room left beside the other items.
+
+`mac-i3 bar-preview out.png [dark] [flat] [crowded] [mine] [budget=<points>]` renders a sample bar offscreen (no daemon needed), and `mac-i3 bar` prints what the bar shows (including each workspace's layout as text, with app names) and where it is on screen, and `mac-i3 doctor` warns if macOS is hiding
 it. **macOS only draws the menu bar on the primary display** while displays share a Space (the default), so the
 bar lists all displays' workspaces in one place. On a Mac with a notch a crowded menu bar can hide the item
 behind the notch: Cmd-drag other items out of the way, or use `workspace_bar_icons none`. You can also Cmd-drag
