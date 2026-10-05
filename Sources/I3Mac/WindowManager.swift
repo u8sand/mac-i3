@@ -762,8 +762,19 @@ public final class WindowManager {
             lastOutputs = desc
             tree.updateOutputs(outs, labels: Displays.labels(), primary: Displays.primaryName())
             bar?.setPanelFrames(barPanelFrames())
+            // Every window gets placed again, hidden ones included: the park point (past the screens' far corner)
+            // has moved, and macOS pulls windows it finds off-screen back onto a display when one is added. Parked
+            // windows used to be skipped as "already parked" and stayed in view until their workspace was visited.
+            // macOS can keep nudging windows for a moment after the change, so this is repeated once it settles.
             applied.removeAll()
+            parked.removeAll()
             changed = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard let self else { return }
+                self.applied.removeAll()
+                self.parked.removeAll()
+                self.applyLayout()
+            }
             // The status item is anchored to a particular screen's menu bar; give macOS a moment to finish
             // laying that out after the reconfiguration before checking whether ours survived it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.bar?.verifyPresence() }
