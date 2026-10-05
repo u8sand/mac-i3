@@ -145,9 +145,9 @@ public enum DefaultConfig {
     # Each workspace's windows as i3-style containers, e.g. h[icon icon] t[icon v[icon icon]]
     # (h v t s = horizontal, vertical, tabbed, stacked; f[...] = floating), or flat: just the app icons.
     # workspace_bar_layout tree
-    # Where the bar goes: in the macOS menu bar (menubar; it gets only the room left there), or a bar of its own
-    # along the top or bottom of every display (top, bottom), showing that display's workspaces.
-    # workspace_bar_position menubar
+    # Where the bar goes: a bar of its own along the top or bottom of every display (top, bottom), showing that
+    # display's workspaces, or in the macOS menu bar (menubar; it gets only the room left there).
+    # workspace_bar_position top
     #
     # Wrap around at the edge of a container when moving focus.
     # focus_wrapping yes

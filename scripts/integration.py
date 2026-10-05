@@ -873,7 +873,7 @@ def s_workspace_bar(d):
     d.click(pt, settle=0.8, also="Control Center,Window Server")
     assert d.state()["workspace"] == "1", "clicking the cell for workspace 1 should switch to it"
     assert _bar_workspaces(_bar())["1"]["focused"]
-s_workspace_bar.config = "workspace_bar yes\n"
+s_workspace_bar.config = "workspace_bar yes\nworkspace_bar_position menubar\n"
 
 
 def s_workspace_bar_off(d):
@@ -900,7 +900,7 @@ def s_workspace_bar_self_heal(d):
     assert run("msg", "debug-verify-bar").stdout.strip() == "ok"
     d.settle(0.5)
     assert _bar()["visible"] is True, "two consecutive bad readings should trigger a rebuild"
-s_workspace_bar_self_heal.config = "workspace_bar yes\n"
+s_workspace_bar_self_heal.config = "workspace_bar yes\nworkspace_bar_position menubar\n"
 
 
 def s_workspace_bar_layout(d):
@@ -917,7 +917,7 @@ def s_workspace_bar_layout(d):
     d.key("Mod1+Shift+space")                                                    # ... and float the focused window
     assert ws()["notation"].endswith("f[mac-i3]"), ws()["notation"]
     assert "tree" in _bar()["detail"], _bar()["detail"]
-s_workspace_bar_layout.config = "workspace_bar yes\n"
+s_workspace_bar_layout.config = "workspace_bar yes\nworkspace_bar_position menubar\n"
 
 
 def s_workspace_bar_top(d):
@@ -941,7 +941,7 @@ def s_workspace_bar_flat(d):
     """workspace_bar_layout flat: only app icons, no tree."""
     d.spawn("A"); d.spawn("B")
     assert "icons(" in _bar()["detail"] and "tree" not in _bar()["detail"], _bar()["detail"]
-s_workspace_bar_flat.config = "workspace_bar yes\nworkspace_bar_layout flat\n"
+s_workspace_bar_flat.config = "workspace_bar yes\nworkspace_bar_layout flat\nworkspace_bar_position menubar\n"
 
 
 SCENARIOS = [(n[2:], f) for n, f in sorted(globals().items()) if n.startswith("s_") and callable(f)]

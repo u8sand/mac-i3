@@ -139,7 +139,7 @@ edges* (System Settings → Desktop & Dock → Windows) so it does not compete w
 
 `~/.config/mac-i3/config` uses i3 syntax (`mac-i3 default-config` prints the built-in one):
 `set`, `bindsym` (incl. `--release`), `mode "name" { ... }`, `exec`, `gaps inner|outer N`,
-`focus_wrapping`, `workspace_bar yes|no`, `workspace_bar_icons all|active|none`, `workspace_bar_layout tree|flat`, `workspace_bar_position menubar|top|bottom`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
+`focus_wrapping`, `workspace_bar yes|no`, `workspace_bar_icons all|active|none`, `workspace_bar_layout tree|flat`, `workspace_bar_position top|bottom|menubar`, `mouse_warping window|center|output|none`, `mouse_gestures yes|no`, `mouse_drop_center group|swap`, `workspace N output M`, `for_window`, `assign` (see below).
 Keys are physical (layout independent).
 
 ### Window rules
@@ -164,22 +164,24 @@ mouse or `focus mode_toggle` (not bound by default; the default config has it re
 
 ### Workspace bar
 
-A menu bar item lists your workspaces, so you can always see where you are:
+A bar along the top of every display (or in the macOS menu bar, see below) lists your workspaces, so you can
+always see where you are:
 
 ```
  1 ▣▣   2 ▣   ⟦3 ▣▣▣⟧ ┃ 4 ▣   ⟦5 ▣⟧        resize
 ```
 
-* Workspaces are grouped **by display** (in `output N` order, primary first, separated by a divider).
-* The workspace **showing** on each display has a soft highlight; the one with **keyboard focus** is filled
-  with the accent colour.
+* Each display's bar lists **that display's** workspaces. (In the menu bar there is one list, grouped by display
+  in `output N` order, primary first, separated by a divider.)
+* The workspace **showing** on each display is highlighted and the one with **keyboard focus** stands out
+  (in i3's colours on the bar, like the tab bars; with the accent colour in the menu bar).
 * Each workspace shows its **window layout in i3 style**: a container is its layout letter (`h` horizontal,
   `v` vertical, `t` tabbed, `s` stacked) followed by its children in square brackets, and each window is its
   app icon. Chrome and a terminal side by side, next to a tabbed pair whose second tab is split vertically, reads
   `h[chrome term] t[chrome v[chrome chrome]]` (drawn with the real app icons in place of the names). The
   workspace's own container is left implicit while it is plain horizontal, and shows as `t[…]`, `v[…]` or `s[…]`
   otherwise; floating windows form an `f[…]` group, and the window with keyboard focus is underlined.
-* When the item would get too wide for the menu bar it degrades step by step: the tree stays only on the showing
+* When it would get too wide (in practice only in the menu bar) it degrades step by step: the tree stays only on the showing
   workspaces, then those fall back to one icon per app, and finally to numbers only, so it never crowds out your
   other menu bar items. (`workspace_bar_layout flat` skips the tree and shows just app icons.)
 * Only workspaces that exist are listed (they have windows or are showing), sorted numerically.
@@ -191,13 +193,14 @@ A menu bar item lists your workspaces, so you can always see where you are:
 workspace_bar yes|no                 # default yes
 workspace_bar_icons all|active|none  # default all: detail everywhere (dropped when crowded); active: only on showing workspaces
 workspace_bar_layout tree|flat       # default tree: h[icon icon] structure; flat: just the app icons
-workspace_bar_position menubar|top|bottom  # default menubar; top/bottom: a bar of its own on every display
+workspace_bar_position top|bottom|menubar  # default top: a bar of its own on every display; menubar: in the macOS menu bar
 ```
 
-With `workspace_bar_position top` or `bottom` the list gets a bar of its own along that edge of every display
-(each showing that display's workspaces, windows tiling around it), so it is never squeezed by the menu bar;
-the packaged app keeps a small menu bar glyph for its menu. `menubar` puts it in the macOS menu bar, which
-only gives it the room left beside the other items.
+By default (`workspace_bar_position top`, or `bottom`) the list is a bar of its own along that edge of every
+display, styled like the tab bars: each shows that display's workspaces, windows tile flush against it, and it
+is never squeezed by the menu bar; the packaged app keeps a small menu bar glyph for its menu. `menubar` puts
+the list in the macOS menu bar instead, which only gives it the room left beside the other items (the
+degrading described above applies there); on macOS 27 it has known issues, see [Known limitations](#known-limitations).
 
 `mac-i3 bar-preview out.png [dark] [flat] [crowded] [mine] [budget=<points>]` renders a sample bar offscreen (no daemon needed), and `mac-i3 bar` prints what the bar shows (including each workspace's layout as text, with app names) and where it is on screen, and `mac-i3 doctor` warns if macOS is hiding
 it. **macOS only draws the menu bar on the primary display** while displays share a Space (the default), so the
@@ -329,7 +332,13 @@ were left held down system-wide.
 * Windows on other native macOS Spaces are invisible to the Accessibility API: stay on one Space and use i3 workspaces instead.
 * Apps that snap or enforce minimum sizes (Terminal snaps to its character grid) may end a few pixels off their tile.
 * Option+key chords that are bound are swallowed, so apps that use Option as Meta lose those chords.
-* `restart` re-reads all windows; the layout tree is rebuilt (windows are re-tiled in creation order).
+* `restart` re-reads all windows and restores the saved layout (`layout_persistence`); windows it cannot match
+  to the saved layout (an app relaunched with different titles) are tiled in as new.
+* **`workspace_bar_position menubar` on macOS 27:** the menu bar is now drawn as a single surface, with no separate
+  window per status item. Two problems follow. mac-i3 can only estimate the room left for its item by assuming it
+  is the leftmost status item, so other items to its left can still crowd it into being hidden. And with an
+  external display connected, clicks on the item have been seen not to reach it (the cause is not yet known). The
+  default, `top` (or `bottom`), is not affected.
 
 ## License
 

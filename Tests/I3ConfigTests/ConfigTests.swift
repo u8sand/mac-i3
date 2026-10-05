@@ -202,7 +202,7 @@ import Testing
     }
 
     @Test func position() {
-        #expect(ConfigParser.parse("").config.workspaceBarPosition == "menubar")
+        #expect(ConfigParser.parse("").config.workspaceBarPosition == "top")
         for p in ["menubar", "top", "bottom"] { #expect(ConfigParser.parse("workspace_bar_position \(p)").config.workspaceBarPosition == p) }
         #expect(ConfigParser.parse("workspace_bar_position left").errors.count == 1)
     }
