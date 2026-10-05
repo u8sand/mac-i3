@@ -68,15 +68,24 @@ public enum Displays {
         let statusLevel = Int(CGWindowLevelForKey(.statusWindow))
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
         var used = 0.0
+        var sawItems = false
         for w in windows where (w[kCGWindowLayer as String] as? Int) == statusLevel {
             guard let d = w[kCGWindowBounds as String] as? NSDictionary, let b = CGRect(dictionaryRepresentation: d),
                   b.minY <= 1, b.minX >= left - 1, b.maxX <= width + 2 else { continue }
+            sawItems = true
             if let n = w[kCGWindowNumber as String] as? Int, n == ownWindow { continue }
             // Ours is whatever overlaps our own frame. Not an exact match: right after the bar resizes, the window
             // server still reports its old bounds for a moment, and counting ourselves as another item then halved
             // the room and briefly stripped every icon each time a window opened or closed.
             if let own = ownFrame, own.w > 0, b.minX < own.maxX - 1, b.maxX > own.x + 1 { continue }
             used += b.width
+        }
+        if !sawItems {
+            // macOS 27: the menu bar is a single Window Server surface, with no window per status item to measure.
+            // Our own item still knows its frame, and items are laid out leftwards from the right, so its room is
+            // from the notch (or the app menus) to its own right edge.
+            guard let own = ownFrame, own.w > 0, own.maxX > left else { return nil }
+            return own.maxX - left
         }
         return max(0, width - left - used)
     }

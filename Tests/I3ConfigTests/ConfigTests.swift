@@ -200,6 +200,12 @@ import Testing
         #expect(ConfigParser.parse("workspace_bar_layout tree").config.workspaceBarLayout == "tree")
         #expect(ConfigParser.parse("workspace_bar_layout nested").errors.count == 1)
     }
+
+    @Test func position() {
+        #expect(ConfigParser.parse("").config.workspaceBarPosition == "menubar")
+        for p in ["menubar", "top", "bottom"] { #expect(ConfigParser.parse("workspace_bar_position \(p)").config.workspaceBarPosition == p) }
+        #expect(ConfigParser.parse("workspace_bar_position left").errors.count == 1)
+    }
 }
 
 @Suite struct LayoutPersistenceOption {

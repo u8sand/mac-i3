@@ -416,8 +416,39 @@ public final class WindowManager {
     func configureBar() {
         let b = ensureBar()
         b.configure(enabled: config.workspaceBar, icons: config.workspaceBarIcons, layout: config.workspaceBarLayout,
-                    glyphWhenDisabled: AppInfo.isBundled)
+                    position: config.workspaceBarPosition, glyphWhenDisabled: AppInfo.isBundled)
+        b.setPanelFrames(barPanelFrames())
         updateBar()
+    }
+
+    /// A `top`/`bottom` workspace bar takes this edge of every display (nil: the bar is in the menu bar, or off).
+    var barEdge: String? {
+        config.workspaceBar && (config.workspaceBarPosition == "top" || config.workspaceBarPosition == "bottom")
+            ? config.workspaceBarPosition : nil
+    }
+
+    /// The displays' usable areas, less the strip a `top`/`bottom` workspace bar takes: what windows tile into.
+    /// The outer gap is taken out of that strip, so windows and tab bars sit flush against the bar.
+    func managedOutputs() -> [(name: String, rect: Rect)] {
+        let h = max(0, Double(WorkspaceBarController.panelHeight) - tree.outerGap)
+        return Displays.outputs().map { o in
+            switch barEdge {
+            case "top": return (o.name, Rect(o.rect.x, o.rect.y + h, o.rect.w, o.rect.h - h))
+            case "bottom": return (o.name, Rect(o.rect.x, o.rect.y, o.rect.w, o.rect.h - h))
+            default: return o
+            }
+        }
+    }
+
+    /// Where each display's own bar goes: the strip `managedOutputs()` leaves out.
+    func barPanelFrames() -> [String: Rect] {
+        guard let edge = barEdge else { return [:] }
+        let h = Double(WorkspaceBarController.panelHeight)
+        var out: [String: Rect] = [:]
+        for o in Displays.outputs() {
+            out[o.name] = Rect(o.rect.x, edge == "top" ? o.rect.y : o.rect.maxY - h, o.rect.w, h)
+        }
+        return out
     }
 
     /// The menu bar item; created early so it can also show "needs permission" before the daemon starts.
@@ -723,12 +754,14 @@ public final class WindowManager {
         pruneObservers(alivePids)
         var changed = forceApply
 
-        let outs = Displays.outputs()
+        // The tiling area: it also changes when a `top`/`bottom` bar is turned on or off by a config reload.
+        let outs = managedOutputs()
         let desc = describeOutputs(outs)
         if desc != lastOutputs {
-            AppInfo.note("displays changed: \(lastOutputs) -> \(desc)")
+            AppInfo.note("tiling area changed (displays or bar position): \(lastOutputs) -> \(desc)")
             lastOutputs = desc
             tree.updateOutputs(outs, labels: Displays.labels(), primary: Displays.primaryName())
+            bar?.setPanelFrames(barPanelFrames())
             applied.removeAll()
             changed = true
             // The status item is anchored to a particular screen's menu bar; give macOS a moment to finish

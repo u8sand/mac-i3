@@ -868,7 +868,9 @@ def s_workspace_bar(d):
     pt = (cell["x"] + cell["w"] / 2, cell["y"] + cell["h"] / 2)
     f = b["frame"]
     assert f["x"] <= pt[0] <= f["x"] + f["w"] and f["y"] <= pt[1] <= f["y"] + f["h"], "the cell must lie inside the item's own frame"
-    d.click(pt, settle=0.8, also="Control Center")                   # a real click on the "1" cell (macOS hosts menu bar items in Control Center)
+    # A real click on the "1" cell. macOS hosts menu bar items in Control Center (26) or draws the whole menu bar
+    # as one Window Server surface (27): either may own the window under the press.
+    d.click(pt, settle=0.8, also="Control Center,Window Server")
     assert d.state()["workspace"] == "1", "clicking the cell for workspace 1 should switch to it"
     assert _bar_workspaces(_bar())["1"]["focused"]
 s_workspace_bar.config = "workspace_bar yes\n"
@@ -916,6 +918,23 @@ def s_workspace_bar_layout(d):
     assert ws()["notation"].endswith("f[mac-i3]"), ws()["notation"]
     assert "tree" in _bar()["detail"], _bar()["detail"]
 s_workspace_bar_layout.config = "workspace_bar yes\n"
+
+
+def s_workspace_bar_top(d):
+    """`workspace_bar_position top`: each display gets a bar of its own along its top edge, listing that display's
+    workspaces, and windows tile below it rather than under it. Switching workspace updates the bar."""
+    d.spawn("A"); d.spawn("B")
+    b = _bar()
+    assert b["position"] == "top" and b["panels"], b
+    panel = b["panels"][0]
+    for t in "AB":                                                    # flush against the bar: no outer gap on its side
+        x, y, w, h = d.frame(t)
+        assert abs(y - (panel["y"] + panel["h"])) < 1, f"{t} should start right below the bar: {(x, y, w, h)} vs {panel}"
+    assert panel["workspaces"] == ["1"], panel
+    d.key("Mod1+3"); d.settle(0.3)
+    assert _bar()["panels"][0]["workspaces"] == ["1", "3"], _bar()["panels"]
+s_workspace_bar_top.config = "workspace_bar yes\nworkspace_bar_position top\n"
+
 
 
 def s_workspace_bar_flat(d):
