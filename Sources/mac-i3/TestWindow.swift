@@ -29,6 +29,15 @@ func runTestWindow(title: String) -> Never {
         label.centerXAnchor.constraint(equalTo: win.contentView!.centerXAnchor),
         label.centerYAnchor.constraint(equalTo: win.contentView!.centerYAnchor),
     ])
+    if let path = ProcessInfo.processInfo.environment["MAC_I3_KEYLOG"] {
+        // Debug aid: record every key press this app receives (so key routing can be checked).
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            if let h = FileHandle(forWritingAtPath: path) ?? { FileManager.default.createFile(atPath: path, contents: nil); return FileHandle(forWritingAtPath: path) }() {
+                h.seekToEndOfFile(); h.write(Data("\(title) \(e.keyCode) active=\(NSApp.isActive) key=\(win.isKeyWindow)\n".utf8)); try? h.close()
+            }
+            return e
+        }
+    }
     win.makeKeyAndOrderFront(nil)
     app.activate(ignoringOtherApps: true)
     var sources: [DispatchSourceSignal] = []

@@ -52,6 +52,8 @@ public final class WindowManager {
     /// The tree's focused window at the last layout pass; a change means we must move OS focus.
     var lastAppliedFocus: WindowID?
     var focusPushedAt = Date.distantPast
+    /// Set when focus moved (by us or the user); the next layout re-raises the floating windows.
+    var floatRaisePending = false
     var reconcilePending = false
     /// Set when a rule moved a new window away from the focus, so OS focus must be restored, not adopted.
     var reclaimFocus = false
@@ -226,6 +228,13 @@ public final class WindowManager {
             nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in self?.requestReconcile() }
         }
         nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+            // Someone else brought an app forward (a click, Cmd-Tab): put the floats back on top.
+            // Wait a beat so we never swap the frontmost app in the middle of the click that caused this.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self, Date().timeIntervalSince(self.focusPushedAt) > 0.5 else { return }
+                self.floatRaisePending = true
+                self.requestReconcile()
+            }
             self?.requestReconcile()
             self?.bar?.refit()   // without a notch, the frontmost app's menus decide how much room the bar has
         }
@@ -879,7 +888,7 @@ public final class WindowManager {
             focusPushedAt = Date()
             changed = true
         } else if syncFocusFromOS() { changed = true }
-        if changed { applyLayout() } else { verifyFrames() }
+        if changed || floatRaisePending { applyLayout() } else { verifyFrames() }
     }
 
     /// The frontmost app's focused window is in macOS's own fullscreen, i.e. its fullscreen Space is showing.
@@ -900,11 +909,27 @@ public final class WindowManager {
         // Right after we moved focus ourselves the OS may still report the old window; ignore that
         // sample entirely (do not record it), so a click made in that moment is still adopted later.
         guard Date().timeIntervalSince(focusPushedAt) > 0.5 else { return false }
+        // While a float's app is deliberately in front, the OS focus is not the user's choice (unless they click).
+        // The frontmost app is then the float's, so its focused window says nothing about a click: use the window under
+        // the cursor instead (floats are on top).
+        if let f = keyTap.forward, let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           f.whenFrontmost.contains(front) {
+            guard Date().timeIntervalSince(lastMouseActivity) <= 1 else { return false }
+            let c = WindowManager.cursor()
+            let hits = applied.filter { !parked.contains($0.key) && $0.value.contains(x: c.x, y: c.y) }.map { $0.key }
+            guard let id = hits.first(where: { tree.find($0)?.isFloating == true }) ?? hits.first else { return false }
+            lastAppliedFocus = id
+            if tree.focusedWindowID == id { return false }
+            tree.focusWindow(id)
+            floatRaisePending = true
+            return true
+        }
         let os = osFocusedWindowID()
         defer { lastOSFocus = os }
         guard let os, os != lastOSFocus else { return false }
         guard tree.find(os) != nil else { return false }
         lastAppliedFocus = os
+        floatRaisePending = true
         if tree.focusedWindowID == os { return false }
         tree.focusWindow(os)
         return true
@@ -970,6 +995,7 @@ public final class WindowManager {
         }
         overlay?.update(bars: res.bars, tree: tree)
         pushFocus(res)
+        if floatRaisePending { floatRaisePending = false; raiseFloating(res) }
         warpAfterWindowClosed(layout: res)
         updateBar()
         saveSnapshot()
@@ -980,6 +1006,7 @@ public final class WindowManager {
         let target = res.focusedWindow
         defer { lastAppliedFocus = target }
         guard let id = target, id != lastAppliedFocus, let w = wins[id] else { return }
+        floatRaisePending = true
         focusPushedAt = Date()
         let app = AXUIElementCreateApplication(w.pid)
         AX.set(app, kAXFrontmostAttribute, kCFBooleanTrue)
@@ -987,6 +1014,65 @@ public final class WindowManager {
         AX.set(w.element, kAXFocusedAttribute, kCFBooleanTrue)
         AXUIElementPerformAction(w.element, kAXRaiseAction as CFString)
         lastOSFocus = id
+    }
+
+    /// Floating windows stay above the tiled layout even when a tiled window has focus
+    /// (`res.floating` is back-to-front, so the most recently focused float ends up on top).
+    /// Windows of another app only go above the frontmost app's by making their app frontmost, so
+    /// when the focus is on a tiled window we cycle through the floats' apps and then give focus back
+    /// without raising it (see `FrontOrder`).
+    func raiseFloating(_ res: LayoutResult) {
+        // Leaving the "float in front, tiled window focused" state: the front app was told it lost focus, and
+        // the OS will not reactivate it by itself since it is already frontmost, so do that explicitly.
+        // Never change the frontmost app while a mouse button is down: the app being clicked would lose the click.
+        if NSEvent.pressedMouseButtons != 0 {
+            floatRaisePending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.requestReconcile() }
+            return
+        }
+        let wasForwarding = keyTap.forward != nil
+        keyTap.forward = nil
+        defer {
+            if wasForwarding, keyTap.forward == nil, let id = res.focusedWindow, let w = wins[id] {
+                FrontOrder.bringToFront(pid: w.pid, window: id)
+                FrontOrder.reactivate(pid: w.pid, window: id)
+            }
+        }
+        let floats = res.floating.filter { !res.hidden.contains($0) && !parked.contains($0) && !nativeFullscreen.contains($0) }
+        guard !floats.isEmpty, res.fullscreen == nil else { return }
+        let focus = res.focusedWindow.flatMap { wins[$0] }
+        log("raise floats \(floats) focus=\(String(describing: res.focusedWindow)) available=\(FrontOrder.available)")
+        var crossApp = false
+        var floatPIDs = Set<pid_t>()
+        for id in floats {
+            guard let w = wins[id] else { continue }
+            AXUIElementPerformAction(w.element, kAXRaiseAction as CFString)
+            if let focus, focus.pid != w.pid, res.focusedWindow.map({ !floats.contains($0) }) == true {
+                log("  front float \(id) pid \(w.pid)")
+                FrontOrder.bringToFront(pid: w.pid, window: id)
+                floatPIDs.insert(w.pid)
+                crossApp = true
+            }
+        }
+        if crossApp, let focus, let fid = res.focusedWindow {
+            log("  refocus \(fid) pid \(focus.pid) without raise")
+            // The previous front app deactivates asynchronously; send the focus events after that has settled
+            // (and again once more), or its window can lose key status right after we gave it.
+            let from = floats.last!, pid = focus.pid
+            for delay in [0.0, 0.12, 0.3] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self, self.keyTap.forward?.target == pid, self.lastOSFocus == fid else { return }
+                    FrontOrder.focusWithoutRaise(pid: pid, window: fid, from: from)
+                    // Telling the tiled window it is key can order it above the floats again: raise them once more.
+                    for id in floats { if let w = self.wins[id] { AXUIElementPerformAction(w.element, kAXRaiseAction as CFString) } }
+                }
+            }
+            // The float's app is now frontmost, so it would get the typing: send keys to the focused window's app.
+            keyTap.forward = (floatPIDs, focus.pid)
+            keyTap.debug = opts.verbose || config.verbose
+            focusPushedAt = Date()
+            lastOSFocus = fid
+        }
     }
 
     /// Snap windows back if something (or the user) moved them; give up after a few tries so

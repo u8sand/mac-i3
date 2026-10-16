@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 mac-i3 contributors
 
+import AppKit
 import CoreGraphics
 import Foundation
 import I3Config
@@ -12,9 +13,14 @@ final class KeyTap {
     fileprivate var tap: CFMachPort?
     private var source: CFRunLoopSource?
     fileprivate var swallowedDown = Set<UInt16>()
+    /// While one of the `whenFrontmost` apps is frontmost, keys it would receive are sent to `target`
+    /// instead. Used when a floating window's app is in front (to stay on top) but a tiled window of
+    /// another app has the focus.
+    var debug = false
+    var forward: (whenFrontmost: Set<pid_t>, target: pid_t)?
 
     func start() -> Bool {
-        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
         let ref = Unmanaged.passUnretained(self).toOpaque()
         guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                         eventsOfInterest: mask, callback: keyTapCallback, userInfo: ref) else { return false }
@@ -49,18 +55,26 @@ private func keyTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CG
         if let t = me.tap { CGEvent.tapEnable(tap: t, enable: true) }
         return Unmanaged.passUnretained(event)
     }
-    guard type == .keyDown || type == .keyUp else { return Unmanaged.passUnretained(event) }
+    var forwardTo: pid_t?
+    if let f = me.forward, let front = NSWorkspace.shared.frontmostApplication?.processIdentifier, f.whenFrontmost.contains(front) { forwardTo = f.target }
+    func deliver() -> Unmanaged<CGEvent>? {
+        guard let pid = forwardTo else { return Unmanaged.passUnretained(event) }
+        event.postToPid(pid)
+        if type != .flagsChanged, type == .keyDown, me.debug { FileHandle.standardError.write(Data("[mac-i3] forward key \(event.getIntegerValueField(.keyboardEventKeycode)) -> pid \(pid)\n".utf8)) }
+        return nil
+    }
+    guard type == .keyDown || type == .keyUp else { return type == .flagsChanged ? deliver() : Unmanaged.passUnretained(event) }
     let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
     let mods = KeyTap.modifiers(from: event.flags)
     if type == .keyUp {
         if me.swallowedDown.remove(code) != nil { return nil }
-        return Unmanaged.passUnretained(event)
+        return deliver()
     }
     if me.handler?(code, mods, true) == true {
         me.swallowedDown.insert(code)
         return nil
     }
-    return Unmanaged.passUnretained(event)
+    return deliver()
 }
 
 /// Posts synthetic key presses (used by `mac-i3 inject` and the integration tests).
