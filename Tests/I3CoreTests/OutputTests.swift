@@ -240,3 +240,37 @@ func threeDisplays() -> Tree {
         #expect(t.activeOutput.name == "display-1")
     }
 }
+
+@Suite struct FloatingAcrossOutputs {
+    @Test func floatingWindowFollowsItsContainerToAnotherOutput() {
+        let t = twoDisplays()
+        t.addWindow(1, floating: true, rect: Rect(100, 200, 300, 200))
+        t.run("move container to output right")
+        #expect(t.computeLayout().frames[1] == Rect(1100, 200, 300, 200))
+    }
+
+    @Test func floatingWindowFollowsItsWorkspace() {
+        let t = twoDisplays()
+        t.addWindow(1, floating: true, rect: Rect(100, 200, 300, 200))
+        t.run("move workspace to output right")
+        #expect(t.computeLayout().frames[1] == Rect(1100, 200, 300, 200))
+    }
+}
+
+@Suite struct FloatingDraggedAcrossOutputs {
+    @Test func draggedFloatJoinsTheWorkspaceOnTheOtherOutput() {
+        let t = twoDisplays()
+        t.addWindow(1, floating: true, rect: Rect(100, 200, 300, 200))
+        t.floatingFrameChanged(1, Rect(1300, 200, 300, 200))
+        #expect(t.find(1)?.output === t.outputs[1])
+        #expect(t.find(1)?.workspace === t.currentWorkspace(of: t.outputs[1]))
+        #expect(t.computeLayout().frames[1] == Rect(1300, 200, 300, 200))
+    }
+
+    @Test func keyboardMoveAcrossTheEdgeSwitchesOutput() {
+        let t = twoDisplays()
+        t.addWindow(1, floating: true, rect: Rect(800, 200, 300, 200))   // centre x = 950
+        t.run("move right 100 px")
+        #expect(t.find(1)?.output === t.outputs[1])
+    }
+}

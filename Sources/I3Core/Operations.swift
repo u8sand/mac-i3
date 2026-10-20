@@ -214,7 +214,21 @@ extension Tree {
     }
 
     public func floatingFrameChanged(_ id: WindowID, _ r: Rect) {
-        if let c = find(id), c.isFloating { c.rect = r }
+        if let c = find(id), c.isFloating { c.rect = r; adoptFloatingOutput(c) }
+    }
+
+    /// A floating window whose centre now lies on another output (dragged there, or moved with `move left|right`)
+    /// belongs to the workspace showing on that output, not the one it came from. Its coordinates are already right.
+    func adoptFloatingOutput(_ c: Con) {
+        guard c.isFloating, let from = c.parent, let src = c.output,
+              let out = outputAt(x: c.rect.midX, y: c.rect.midY), out !== src else { return }
+        let oldParent = from
+        let wasFocused = focused === c
+        c.detach()
+        cleanup(oldParent)
+        currentWorkspace(of: out).attach(c, focusFront: true)
+        if wasFocused { focus(c) }
+        pruneEmptyWorkspaces()
     }
 
     // MARK: - move
@@ -229,6 +243,7 @@ extension Tree {
             case .up: con.rect.y -= px
             case .down: con.rect.y += px
             }
+            adoptFloatingOutput(con)
             return
         }
         let o = dir.orientation
@@ -349,11 +364,13 @@ extension Tree {
         let target = workspace(named: name) ?? createWorkspace(name, on: preferredOutput(for: name) ?? activeOutput)
         if target === from { return }
         let oldParent = con.parent!
+        let oldOutput = con.output
         con.detach()
         cleanup(oldParent)
         con.percent = 0
         if con.isFloating {
             target.attach(con)
+            carryFloating([con], from: oldOutput, to: target.output)
         } else {
             let ref = descendTiling(target)
             if ref.isWindow {

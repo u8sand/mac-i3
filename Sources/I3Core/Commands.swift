@@ -200,10 +200,11 @@ extension Tree {
         let from = activeWorkspace
         let ws = currentWorkspace(of: out)
         let oldParent = con.parent!
+        let oldOutput = con.output
         con.detach()
         cleanup(oldParent)
         con.percent = 0
-        if con.isFloating { ws.attach(con) } else {
+        if con.isFloating { ws.attach(con); carryFloating([con], from: oldOutput, to: out) } else {
             let ref = descendTiling(ws)
             if ref.isWindow { ref.parent!.attach(con, at: ref.indexInParent! + 1); ref.parent!.fixPercent() }
             else { ref.attach(con); ref.fixPercent() }

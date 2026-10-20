@@ -81,11 +81,28 @@ extension Tree {
         pruneEmptyWorkspaces()
     }
 
+    /// Floating windows keep their place relative to the output they were on when they move to another one (scaled
+    /// to its size, and kept on it), as in i3. Without this they would stay at their old absolute coordinates, i.e.
+    /// on the old display.
+    func carryFloating(_ floats: [Con], from src: Con?, to dst: Con?) {
+        guard let src, let dst, src !== dst, src.rect.w > 0, src.rect.h > 0 else { return }
+        let sx = dst.rect.w / src.rect.w, sy = dst.rect.h / src.rect.h
+        for f in floats where f.isFloating {
+            var r = Rect(dst.rect.x + (f.rect.x - src.rect.x) * sx, dst.rect.y + (f.rect.y - src.rect.y) * sy,
+                         f.rect.w * sx, f.rect.h * sy)
+            r.w = min(r.w, dst.rect.w); r.h = min(r.h, dst.rect.h)
+            r.x = min(max(r.x, dst.rect.x), dst.rect.maxX - r.w)
+            r.y = min(max(r.y, dst.rect.y), dst.rect.maxY - r.h)
+            f.rect = r
+        }
+    }
+
     /// Put `ws` on `target`, showing it there if `showing`. The output it left is never left without a workspace.
     func relocateWorkspace(_ ws: Con, to target: Con, showing: Bool) {
         guard let src = ws.parent, src !== target else { return }
         ws.detach()
         insertWorkspace(ws, into: target)
+        carryFloating(ws.floating, from: src, to: target)
         if src.children.isEmpty {
             let fresh = createWorkspace(lowestFreeWorkspaceName(for: src), on: src)
             src.focusOrder = [fresh]
