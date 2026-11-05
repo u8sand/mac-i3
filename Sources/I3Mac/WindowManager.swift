@@ -1038,7 +1038,13 @@ public final class WindowManager {
                 FrontOrder.reactivate(pid: w.pid, window: id)
             }
         }
-        let floats = res.floating.filter { !res.hidden.contains($0) && !parked.contains($0) && !nativeFullscreen.contains($0) }
+        // Only floats on the focused window's display compete with it: a float on another display (Zoom on every
+        // screen, say) cannot cover it, and fronting its app would take the keyboard for nothing.
+        let focusOutput = res.focusedWindow.flatMap { tree.find($0)?.output }
+        let floats = res.floating.filter {
+            !res.hidden.contains($0) && !parked.contains($0) && !nativeFullscreen.contains($0)
+                && (focusOutput == nil || tree.find($0)?.output === focusOutput)
+        }
         guard !floats.isEmpty, res.fullscreen == nil else { return }
         let focus = res.focusedWindow.flatMap { wins[$0] }
         log("raise floats \(floats) focus=\(String(describing: res.focusedWindow)) available=\(FrontOrder.available)")
