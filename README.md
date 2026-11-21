@@ -28,7 +28,8 @@ I tried to like [AeroSpace](https://github.com/nikitabobko/AeroSpace) or [Amathy
 
 mac-i3 lives in the **menu bar** (no Dock icon): the workspace list, or a small tiling glyph if you set
 `workspace_bar no`. Right-click it (or click the glyph) for **Reload Config**, **Edit Config…**, **Open Log**,
-**Launch at Login**, **About** and **Quit**. Your configuration is `~/.config/mac-i3/config` (Edit Config creates it
+**Launch at Login**, **Check for Updates…** (asks GitHub for the latest release and offers its `.dmg`; nothing is
+installed automatically), **About** and **Quit**. Your configuration is `~/.config/mac-i3/config` (Edit Config creates it
 from the built-in default the first time); warnings and config errors go to `~/Library/Logs/mac-i3.log`.
 
 * **Command line:** the app contains the CLI. To use `mac-i3 msg …` and friends from a terminal:

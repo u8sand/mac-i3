@@ -27,6 +27,7 @@ USAGE
                               Post synthetic mouse events (screen coordinates, top-left origin)
   mac-i3 restore              Pull windows stranded off-screen back onto the display
   mac-i3 version              Print the version
+  mac-i3 check-update         Ask GitHub for the latest release and compare it with this version
   mac-i3 doctor               Check permissions and environment
   mac-i3 test-window <title>  Open a labelled test window (for trying it out)
   mac-i3 default-config [stock]  Print the built-in default config (or i3's own stock key bindings)
@@ -120,6 +121,20 @@ case "outputs":
     for o in Displays.listing() {
         print("\(o.number)\t\(o.name)\t\(o.label)\t\(Int(o.rect.w))x\(Int(o.rect.h))+\(Int(o.rect.x))+\(Int(o.rect.y))\(o.primary ? "\tprimary" : "")")
     }
+case "check-update":
+    Updates.latest { result in
+        switch result {
+        case .failure(let e): fail("could not check for updates: \(e.localizedDescription)")
+        case .success(let r):
+            let cur = Updates.current
+            print("latest release: \(r.version) (\(r.page.absoluteString))")
+            if let dmg = r.dmg { print("download: \(dmg.absoluteString)") }
+            if let cur { print(cur < r.version ? "this is \(cur): an update is available" : "this is \(cur): up to date") }
+            else { print("this is a development build") }
+            exit(0)
+        }
+    }
+    RunLoop.main.run()
 case "doctor":
     runDoctor()
 case "test-window":

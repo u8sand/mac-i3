@@ -533,6 +533,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
             login.state = AppInfo.loginItemEnabled ? .on : .off
             items.append(login)
         }
+        items.append(action("Check for Updates…", #selector(doCheckForUpdates)))
         items.append(action("About mac-i3", #selector(doAbout)))
         items.append(action("Quit mac-i3", #selector(doQuit), key: "q"))
         return items
@@ -563,6 +564,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     @objc private func doEditConfig() { AppInfo.editConfig() }
     @objc private func doOpenLog() { AppInfo.openLog() }
     @objc private func doAbout() { AppInfo.about() }
+    @objc private func doCheckForUpdates() { Updates.checkInteractively() }
     @objc private func doOpenAccessibility() { AppInfo.openSettings(AppInfo.accessibilityPane) }
     @objc private func doOpenInputMonitoring() { AppInfo.openSettings(AppInfo.inputMonitoringPane) }
     @objc private func doToggleLogin() {
