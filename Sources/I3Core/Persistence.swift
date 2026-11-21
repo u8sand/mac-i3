@@ -265,6 +265,9 @@ extension Tree {
                 for (i, node) in savedWs.nodes.enumerated() {
                     if let con = build(node) { ws.attach(con, at: min(i, ws.children.count)); gained = true }
                 }
+                // A floating window that comes back (an app re-showing the same dialog, e.g. Zoom's share picker) opens
+                // where the user is now, not on the workspace it last appeared on: putting it back there would switch
+                // workspaces under the user as soon as it takes focus.
                 for f in savedWs.floating {
                     guard let w = take(f.windowID) else { continue }
                     let con = Con(.window)
@@ -272,9 +275,10 @@ extension Tree {
                     con.title = w.title
                     con.isFloating = true
                     con.rect = f.rect
-                    ws.attach(con)
+                    let here = activeWorkspace
+                    here.attach(con)
+                    carryFloating([con], from: out, to: here.output)
                     restored += 1
-                    gained = true
                 }
                 if gained {
                     if !existed { ws.layout = savedWs.layout; ws.lastSplit = savedWs.layout.isTabLike ? .splitH : savedWs.layout }

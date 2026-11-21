@@ -125,6 +125,15 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
     /// Where each display's bar goes (AX coordinates), by output name; set by the daemon.
     private var panelFrames: [String: Rect] = [:]
 
+    /// Displays showing an app in macOS fullscreen: their bar is hidden meanwhile.
+    private var fullscreenOutputs = Set<String>()
+
+    func setFullscreenOutputs(_ names: Set<String>) {
+        guard names != fullscreenOutputs else { return }
+        fullscreenOutputs = names
+        refreshPanels()
+    }
+
     func setPanelFrames(_ frames: [String: Rect]) {
         guard frames != panelFrames else { return }
         panelFrames = frames
@@ -137,7 +146,7 @@ final class WorkspaceBarController: NSObject, NSMenuDelegate {
         var live = Set<String>()
         if show {
             for out in summary.outputs {
-                guard let r = panelFrames[out.name] else { continue }
+                guard let r = panelFrames[out.name], !fullscreenOutputs.contains(out.name) else { continue }
                 let panel = panels[out.name] ?? WorkspacePanel(controller: self)
                 panels[out.name] = panel
                 let mine = BarSummary(outputs: [out], mode: summary.mode)

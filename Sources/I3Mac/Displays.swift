@@ -47,6 +47,33 @@ public enum Displays {
             .sorted { $0.rect.x < $1.rect.x || ($0.rect.x == $1.rect.x && $0.rect.y < $1.rect.y) }
     }
 
+    /// Outputs whose current Space is an app's own fullscreen Space (macOS fullscreen). Private SkyLight calls, looked
+    /// up at runtime; empty if they are missing.
+    static func fullscreenOutputs() -> Set<String> {
+        guard let mainConnection, let currentSpace, let spaceType else { return [] }
+        let cid = mainConnection()
+        var out = Set<String>()
+        for s in NSScreen.screens {
+            let id = displayID(s)
+            guard let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue(),
+                  let str = CFUUIDCreateString(nil, uuid) else { continue }
+            if spaceType(cid, currentSpace(cid, str)) == 4 { out.insert("display-\(id)") }   // 4: fullscreen Space
+        }
+        return out
+    }
+
+    private typealias MainConnection = @convention(c) () -> Int32
+    private typealias CurrentSpace = @convention(c) (Int32, CFString) -> UInt64
+    private typealias SpaceType = @convention(c) (Int32, UInt64) -> Int32
+    private static let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
+    private static func sym<T>(_ name: String, _: T.Type) -> T? {
+        guard let h = skyLight, let p = dlsym(h, name) else { return nil }
+        return unsafeBitCast(p, to: T.self)
+    }
+    private static let mainConnection = sym("SLSMainConnectionID", MainConnection.self)
+    private static let currentSpace = sym("SLSManagedDisplayGetCurrentSpace", CurrentSpace.self)
+    private static let spaceType = sym("SLSSpaceGetType", SpaceType.self)
+
     /// Full frames (for off-screen detection).
     static func fullFrames() -> [Rect] { NSScreen.screens.map { axRect($0.frame) } }
 

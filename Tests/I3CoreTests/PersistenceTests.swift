@@ -200,6 +200,19 @@ func roundTrip(_ ids: [WindowID], appName: @escaping (WindowID) -> String? = { _
         #expect(t.workspace(named: "1")?.children.compactMap { $0.windowID } == [1, 2], "workspace 1 must be untouched")
     }
 
+    @Test func returningFloatingWindowOpensOnTheFocusedWorkspace() {
+        let t = makeTree([1])                     // workspace "1"
+        t.run("workspace 9"); t.addWindow(5, floating: true, rect: Rect(100, 100, 300, 200))   // a dialog first seen on 9
+        let snap = t.snapshot(appName: { _ in "App" })
+        t.removeWindow(5)                         // the app hides it
+        t.run("workspace 1")                      // the user is on workspace 1 when the app shows it again
+
+        let n = t.reinsert(from: snap, live: [LiveWindow(id: 5, appName: "App", title: "w5")])
+        #expect(n == 1)
+        #expect(t.find(5)?.workspace?.name == "1", "a returning dialog must not pull the user back to workspace 9")
+        #expect(t.find(5)?.isFloating == true)
+    }
+
     @Test func siblingsAlreadyLiveAreLeftAlone() {
         let t = makeTree([1, 2, 3])               // H[1 2 3]
         let snap = t.snapshot(appName: { _ in "App" })

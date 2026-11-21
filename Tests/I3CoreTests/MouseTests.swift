@@ -391,3 +391,17 @@ import Testing
         #expect(t.dropTarget(x: 100, y: 100, excluding: 2) == nil)
     }
 }
+
+@Suite struct ResizeOrMove {
+    let a = Rect(100, 100, 400, 300)
+
+    @Test func movingKeepsSizeAndShiftsBothEdges() {
+        #expect(!EdgeDeltas.isResize(from: a, to: Rect(160, 140, 400, 300)))
+    }
+
+    @Test func draggingTheLeftOrTopEdgeIsAResizeEvenThoughTheOriginMoved() {
+        #expect(EdgeDeltas.isResize(from: a, to: Rect(60, 100, 440, 300)))    // left edge outward
+        #expect(EdgeDeltas.isResize(from: a, to: Rect(100, 150, 400, 250)))   // top edge inward
+        #expect(EdgeDeltas.isResize(from: a, to: Rect(70, 80, 430, 320)))     // top-left corner
+    }
+}

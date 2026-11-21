@@ -435,3 +435,16 @@ func frames(_ t: Tree) -> [WindowID: Rect] { t.computeLayout().frames }
         #expect(frames(t).count == 1)              // only the visible workspace is laid out
     }
 }
+
+@Suite struct SetAsideWindows {
+    @Test func aSetAsideWindowGivesItsRoomToItsSiblingsAndGetsItBack() {
+        let t = Tree(outputs: [("display-1", Rect(0, 0, 1000, 800))])
+        t.addWindow(1); t.addWindow(2); t.addWindow(3)
+        t.setAside = [2]
+        let f = t.computeLayout().frames
+        #expect(f[2] == nil)
+        #expect(f[1] == Rect(0, 0, 500, 800) && f[3] == Rect(500, 0, 500, 800))
+        t.setAside = []
+        #expect(t.computeLayout().frames[2] != nil)
+    }
+}

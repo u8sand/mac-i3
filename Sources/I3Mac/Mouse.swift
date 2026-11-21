@@ -46,6 +46,17 @@ extension WindowManager {
     func mouseDown() {
         lastMouseActivity = Date()
         let c = WindowManager.cursor()
+        // Adopt the click as the focused window right away instead of waiting for the next poll.
+        defer { DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in self?.reconcile() } }
+        // A press on a floating window (dragging Zoom around) is that window's business: the tiled windows underneath
+        // are not being moved or resized, and treating them as grabbed snapped them back on release (a visible flash).
+        let overFloat = applied.contains { id, r in
+            !parked.contains(id) && tree.find(id)?.isFloating == true && r.contains(x: c.x, y: c.y)
+        }
+        if overFloat { gesture = nil; return }
+        // On a display showing a fullscreen Space nothing is ours to move or resize (and a window entering fullscreen
+        // grows to the whole display, which would read as a huge resize).
+        if let out = tree.outputAt(x: c.x, y: c.y), fullscreenOutputs.contains(out.name) { gesture = nil; return }
         var base: [WindowID: Rect] = [:]
         var interior: WindowID?
         var borders: [WindowID] = []
@@ -62,8 +73,6 @@ extension WindowManager {
             }
         }
         gesture = Gesture(start: c, baseline: base, interior: interior, borders: borders)
-        // Adopt the click as the focused window right away instead of waiting for the next poll.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in self?.reconcile() }
     }
 
     func mouseDragged() {
@@ -97,9 +106,14 @@ extension WindowManager {
     func finish(_ g: Gesture, end: (x: Double, y: Double)) {
         lastMouseActivity = Date()
         var touched: [WindowID] = []
-        if let id = g.interior, let before = g.baseline[id], let w = wins[id], let after = AX.frame(w.element),
-           displaced(before, after) {
-            // Pressed inside a window and it moved: a move. The size afterwards is ignored on purpose.
+        // A window that went into macOS fullscreen meanwhile changed size because of that, not because of the drag.
+        func enteredFullscreen(_ id: WindowID) -> Bool {
+            nativeFullscreen.contains(id) || wins[id].map { AX.bool($0.element, "AXFullScreen") == true } ?? false
+        }
+        if let id = g.interior, !enteredFullscreen(id), let before = g.baseline[id], let w = wins[id], let after = AX.frame(w.element),
+           displaced(before, after), !EdgeDeltas.isResize(from: before, to: after) {
+            // Pressed inside a window and it moved: a move. The size afterwards is ignored on purpose. A press just
+            // inside the left or top edge that resized the window also moves its origin; that is not a move.
             log("mouse: move \(id) to \(Int(end.x)),\(Int(end.y))")
             drop(id, at: end)
             touched.append(id)
@@ -107,7 +121,7 @@ extension WindowManager {
             // Otherwise a resize of whichever window actually changed size. That includes the "interior" one: a
             // neighbour that would not shrink to its slot (an app's minimum width) overlaps the edge being
             // grabbed, so the press lands inside it — and ignoring it then snapped every resize there back.
-            for id in g.borders + (g.interior.map { [$0] } ?? []) {
+            for id in g.borders + (g.interior.map { [$0] } ?? []) where !enteredFullscreen(id) {
                 guard let before = g.baseline[id], let w = wins[id], let after = AX.frame(w.element) else { continue }
                 let d = EdgeDeltas(from: before, to: after)
                 guard abs(after.w - before.w) > 8 || abs(after.h - before.h) > 8 else { continue }

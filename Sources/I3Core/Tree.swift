@@ -22,6 +22,9 @@ public final class Tree {
     public var tabBarHeight = 22.0
     /// Pixels between tiled windows (`gaps inner`) and around the outputs (`gaps outer`).
     public var innerGap = 0.0
+    /// Tiled windows that keep their place in the tree but take no room in the layout for now (a window in macOS's
+    /// own fullscreen lives on a Space of its own, so its slot on the desktop would just be an empty hole).
+    public var setAside: Set<WindowID> = []
     public var outerGap = 0.0
     public private(set) var previousWorkspaceName: String?
     /// `workspace <name> output <spec>...` from the config: where each workspace should live.

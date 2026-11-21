@@ -43,6 +43,9 @@ public final class WindowManager {
     /// Tracked windows currently in macOS's own fullscreen (in a Space of their own, so not listed with the
     /// app's other windows): they keep their place in the tree, and are left alone by the layout until they return.
     var nativeFullscreen = Set<WindowID>()
+    /// Displays currently showing an app's macOS-fullscreen Space. Nothing on them is moved or raised meanwhile (doing
+    /// so pulls the user out of the fullscreen Space), and their bars are hidden.
+    var fullscreenOutputs = Set<String>()
     /// The screen can't be trusted to show windows: the system or its displays are asleep, or the screen is
     /// locked. Every app's window list can come back short then, so no window is removed until it is over.
     var systemAsleep = false, screensAsleep = false, screenLocked = false
@@ -54,6 +57,9 @@ public final class WindowManager {
     var focusPushedAt = Date.distantPast
     /// Set when focus moved (by us or the user); the next layout re-raises the floating windows.
     var floatRaisePending = false
+    var lastCoveredCheckRaise = Date.distantPast
+    /// When the user last ran a command (key binding or `mac-i3 msg`).
+    var lastCommandAt = Date.distantPast
     var reconcilePending = false
     /// Set when a rule moved a new window away from the focus, so OS focus must be restored, not adopted.
     var reclaimFocus = false
@@ -226,6 +232,9 @@ public final class WindowManager {
         for n in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
                   NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
             nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in self?.requestReconcile() }
+        }
+        nc.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.requestReconcile()   // into or out of a fullscreen Space: bars and hands-off state follow
         }
         nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             // Someone else brought an app forward (a click, Cmd-Tab): put the floats back on top.
@@ -518,6 +527,7 @@ public final class WindowManager {
     @discardableResult
     func execute(_ line: String) -> String {
         var errs: [String] = []
+        lastCommandAt = Date()
         let before = focusSnapshot()
         let actions = tree.run(line, errors: &errs)
         for a in actions { perform(a) }
@@ -763,6 +773,14 @@ public final class WindowManager {
         pruneObservers(alivePids)
         var changed = forceApply
 
+        let fs = Displays.fullscreenOutputs()
+        if fs != fullscreenOutputs {
+            log("fullscreen Space on: \(fs.sorted())")
+            fullscreenOutputs = fs
+            bar?.setFullscreenOutputs(fs)
+            changed = true
+        }
+
         // The tiling area: it also changes when a `top`/`bottom` bar is turned on or off by a config reload.
         let outs = managedOutputs()
         let desc = describeOutputs(outs)
@@ -877,7 +895,16 @@ public final class WindowManager {
             wins[f.id] = Win(element: f.element, pid: f.pid)
             if con.title != f.title { con.title = f.title; changed = true }
             // A floating window moved by the user keeps its new frame.
-            if con.isFloating, let actual = f.frame, let want = applied[f.id], !nearlyEqual(actual, want, 4), !parked.contains(f.id) {
+            // Not while it sits on a display showing a fullscreen Space (e.g. Zoom's own panels over its fullscreen meeting).
+            // A float we never placed (just appeared, came back, or the displays changed) is where its app put it: take
+            // that as its frame instead of pushing the one recorded when it first showed up. Apps often create a popup
+            // and only then position it, and moving it back made it flicker in the top-left corner.
+            if con.isFloating, applied[f.id] == nil, !parked.contains(f.id), let actual = f.frame, !onFullscreenOutput(actual) {
+                if con.rect != actual { tree.floatingFrameChanged(f.id, actual) }
+                applied[f.id] = actual
+            }
+            if con.isFloating, let actual = f.frame, let want = applied[f.id], !nearlyEqual(actual, want, 4), !parked.contains(f.id),
+               !onFullscreenOutput(actual) {
                 tree.floatingFrameChanged(f.id, actual)
                 applied[f.id] = actual
             }
@@ -888,6 +915,7 @@ public final class WindowManager {
             focusPushedAt = Date()
             changed = true
         } else if syncFocusFromOS() { changed = true }
+        if !changed, !floatRaisePending, floatsCovered() { floatRaisePending = true }
         if changed || floatRaisePending { applyLayout() } else { verifyFrames() }
     }
 
@@ -974,8 +1002,15 @@ public final class WindowManager {
         return (s.maxX - 1, s.maxY - 1)
     }
 
+    /// Whether `r` (by its centre) is on a display that is showing a fullscreen Space.
+    func onFullscreenOutput(_ r: Rect) -> Bool {
+        guard !fullscreenOutputs.isEmpty, let out = tree.outputAt(x: r.midX, y: r.midY) else { return false }
+        return fullscreenOutputs.contains(out.name)
+    }
+
     @discardableResult
     public func applyLayout() -> LayoutResult {
+        tree.setAside = nativeFullscreen   // in macOS fullscreen: off on a Space of its own, so no empty slot here
         let res = tree.computeLayout()
         let pp = parkPoint
         for id in res.hidden {
@@ -985,7 +1020,7 @@ public final class WindowManager {
             applied[id] = nil
         }
         for (id, r) in res.frames {
-            guard let w = wins[id], !nativeFullscreen.contains(id) else { continue }
+            guard let w = wins[id], !nativeFullscreen.contains(id), !onFullscreenOutput(r) else { continue }
             if parked.contains(id) || applied[id] != r {
                 AX.setFrame(w.element, r)
                 applied[id] = r
@@ -993,7 +1028,7 @@ public final class WindowManager {
                 parked.remove(id)
             }
         }
-        overlay?.update(bars: res.bars, tree: tree)
+        overlay?.update(bars: res.bars.filter { !onFullscreenOutput($0.rect) }, tree: tree)
         pushFocus(res)
         if floatRaisePending { floatRaisePending = false; raiseFloating(res) }
         warpAfterWindowClosed(layout: res)
@@ -1006,6 +1041,20 @@ public final class WindowManager {
         let target = res.focusedWindow
         defer { lastAppliedFocus = target }
         guard let id = target, id != lastAppliedFocus, let w = wins[id] else { return }
+        // A display is showing a fullscreen Space: activating an app (say for Zoom's overlay appearing, which the tree
+        // focuses as a new window) makes macOS switch the user out of it. Only an explicit command may do that.
+        // A floating window the frontmost app just showed (a popup, a menu, a dialog) is already where the app wants it;
+        // making it main/focused and raising it ourselves can make the app dismiss it.
+        if tree.find(id)?.isFloating == true, w.pid == NSWorkspace.shared.frontmostApplication?.processIdentifier,
+           Date().timeIntervalSince(lastCommandAt) > 1 {
+            lastOSFocus = id
+            return
+        }
+        if let o = tree.find(id)?.output, fullscreenOutputs.contains(o.name), !nativeFullscreen.contains(id),
+           Date().timeIntervalSince(lastCommandAt) > 1 {
+            log("not focusing \(id): its display is showing a fullscreen Space")
+            return
+        }
         floatRaisePending = true
         focusPushedAt = Date()
         let app = AXUIElementCreateApplication(w.pid)
@@ -1030,6 +1079,16 @@ public final class WindowManager {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.requestReconcile() }
             return
         }
+        // The focus is on a display showing a fullscreen Space: leave every app's ordering alone. Fronting a float's
+        // app (or re-activating one) from there makes macOS switch the user out of the fullscreen Space.
+        // The same while the focused window is itself in macOS fullscreen: it is on a Space of its own (which may not be
+        // reported as showing yet, mid-transition), and the floats are not on it.
+        if let fid = res.focusedWindow,
+           nativeFullscreen.contains(fid) || (tree.find(fid)?.output.map { fullscreenOutputs.contains($0.name) } ?? false)
+            || (wins[fid].map { AX.bool($0.element, "AXFullScreen") == true } ?? false) {
+            keyTap.forward = nil
+            return
+        }
         let wasForwarding = keyTap.forward != nil
         keyTap.forward = nil
         defer {
@@ -1044,8 +1103,20 @@ public final class WindowManager {
         let floats = res.floating.filter {
             !res.hidden.contains($0) && !parked.contains($0) && !nativeFullscreen.contains($0)
                 && (focusOutput == nil || tree.find($0)?.output === focusOutput)
+                && !(res.frames[$0].map(onFullscreenOutput) ?? false)
         }
         guard !floats.isEmpty, res.fullscreen == nil else { return }
+        // The focus is on a float: the floats are in front already unless a tiled window got over one. Raise only those,
+        // and leave how the app stacks its own floats alone (raising Zoom's meeting window over its "More" popup closes
+        // the popup).
+        if let fid = res.focusedWindow, floats.contains(fid) {
+            for id in coveredFloats(floats, res) {
+                guard let w = wins[id] else { continue }
+                log("raise covered float \(id)")
+                AXUIElementPerformAction(w.element, kAXRaiseAction as CFString)
+            }
+            return
+        }
         let focus = res.focusedWindow.flatMap { wins[$0] }
         log("raise floats \(floats) focus=\(String(describing: res.focusedWindow)) available=\(FrontOrder.available)")
         var crossApp = false
@@ -1075,9 +1146,42 @@ public final class WindowManager {
             }
             // The float's app is now frontmost, so it would get the typing: send keys to the focused window's app.
             keyTap.forward = (floatPIDs, focus.pid)
-            keyTap.debug = opts.verbose || config.verbose
             focusPushedAt = Date()
             lastOSFocus = fid
+        }
+    }
+
+    /// A float sits below a tiled window that overlaps it on the focused display, i.e. some app raised its own window
+    /// after we last put the floats on top (a click's activation can land late). Checked on the regular poll against
+    /// the window server's real stacking order; at most every half second so we never fight an app in a tight loop.
+    func floatsCovered() -> Bool {
+        guard NSEvent.pressedMouseButtons == 0, Date().timeIntervalSince(lastCoveredCheckRaise) > 0.5,
+              Date().timeIntervalSince(focusPushedAt) > 0.5 else { return false }
+        let res = tree.computeLayout()
+        guard res.fullscreen == nil, let fid = res.focusedWindow, !nativeFullscreen.contains(fid),
+              let focusOutput = tree.find(fid)?.output, !fullscreenOutputs.contains(focusOutput.name) else { return false }
+        let floats = res.floating.filter {
+            !res.hidden.contains($0) && !parked.contains($0) && tree.find($0)?.output === focusOutput
+                && !(res.frames[$0].map(onFullscreenOutput) ?? false)
+        }
+        guard let f = coveredFloats(floats, res).first else { return false }
+        log("float \(f) is covered by a tiled window; raising it again")
+        lastCoveredCheckRaise = Date()
+        return true
+    }
+
+    /// The floats among `floats` that sit below an overlapping tiled window, by the window server's stacking order.
+    func coveredFloats(_ floats: [WindowID], _ res: LayoutResult) -> [WindowID] {
+        guard !floats.isEmpty else { return [] }
+        let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let order = info.compactMap { $0[kCGWindowNumber as String] as? Int }.map { WindowID($0) }   // front to back
+        let rank = Dictionary(order.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        return floats.filter { f in
+            guard let fr = res.frames[f], let fRank = rank[f] else { return false }
+            return res.frames.contains { id, r in
+                !res.floating.contains(id) && !res.hidden.contains(id) && (rank[id].map { $0 < fRank } ?? false)
+                    && r.x < fr.maxX && fr.x < r.maxX && r.y < fr.maxY && fr.y < r.maxY
+            }
         }
     }
 

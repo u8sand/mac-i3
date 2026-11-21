@@ -69,8 +69,12 @@ extension Tree {
 
     private func layoutContainer(_ c: Con, _ rect: Rect, _ res: inout LayoutResult, visible: Bool) {
         c.rect = rect
-        let kids = c.children
+        let kids = setAside.isEmpty ? c.children : c.children.filter { k in
+            let ws = k.windows().filter { !$0.isFloating }
+            return ws.isEmpty || !ws.allSatisfy { $0.windowID.map(setAside.contains) ?? false }
+        }
         guard !kids.isEmpty else { return }
+        let share = kids.reduce(0) { $0 + $1.percent }   // < 1 while a sibling is set aside: the rest grow to fill
         switch c.layout {
         case .splitH, .splitV:
             let horizontal = c.layout == .splitH
@@ -79,7 +83,7 @@ extension Tree {
             var start = horizontal ? rect.x : rect.y
             let gap = innerGap
             for (i, k) in kids.enumerated() {
-                acc += k.percent
+                acc += share > 0 ? k.percent / share : 1 / Double(kids.count)
                 let end = (horizontal ? rect.x : rect.y) + (i == kids.count - 1 ? total : (total * acc).rounded())
                 let g1 = i == 0 ? 0 : gap / 2
                 let g2 = i == kids.count - 1 ? 0 : gap / 2
@@ -93,7 +97,7 @@ extension Tree {
             let stacked = c.layout == .stacked
             let bh = tabBarHeight
             let barSize = stacked ? bh * Double(kids.count) : bh
-            let active = focusedChild(c)
+            let active = kids.contains { $0 === focusedChild(c) } ? focusedChild(c) : kids[0]
             let barRect = stacked ? Rect(rect.x, rect.y, rect.w, barSize) : Rect(rect.x, rect.y, rect.w, bh)
             let inner = Rect(rect.x, rect.y + barSize, rect.w, max(rect.h - barSize, 1))
             if visible {

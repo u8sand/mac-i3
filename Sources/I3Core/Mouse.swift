@@ -60,6 +60,19 @@ public struct EdgeDeltas: Equatable {
     }
 }
 
+extension EdgeDeltas {
+    /// Whether a window that went from `a` to `b` during a drag was resized rather than moved. Dragging the left or
+    /// top edge also shifts the window's origin, so "the origin moved" alone does not mean a move: a move shifts
+    /// both edges of an axis the same way, a resize moves one edge of an axis and leaves the opposite one.
+    public static func isResize(from a: Rect, to b: Rect, slack: Double = 4) -> Bool {
+        let l = a.x - b.x, r = b.maxX - a.maxX, t = a.y - b.y, bt = b.maxY - a.maxY
+        let translatedX = abs(l) > slack && abs(r) > slack && l * r < 0
+        let translatedY = abs(t) > slack && abs(bt) > slack && t * bt < 0
+        let resized = abs(b.w - a.w) > 8 || abs(b.h - a.h) > 8
+        return resized && !translatedX && !translatedY
+    }
+}
+
 // Mouse-driven changes: the host reports what the user did with the mouse, the tree applies i3 semantics.
 extension Tree {
 

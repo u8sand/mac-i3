@@ -65,7 +65,7 @@ private final class BarPanel: NSPanel {
         isOpaque = true
         hasShadow = false
         level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
         contentView = barView

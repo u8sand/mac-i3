@@ -16,7 +16,6 @@ final class KeyTap {
     /// While one of the `whenFrontmost` apps is frontmost, keys it would receive are sent to `target`
     /// instead. Used when a floating window's app is in front (to stay on top) but a tiled window of
     /// another app has the focus.
-    var debug = false
     var forward: (whenFrontmost: Set<pid_t>, target: pid_t)?
 
     func start() -> Bool {
@@ -60,7 +59,6 @@ private func keyTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CG
     func deliver() -> Unmanaged<CGEvent>? {
         guard let pid = forwardTo else { return Unmanaged.passUnretained(event) }
         event.postToPid(pid)
-        if type != .flagsChanged, type == .keyDown, me.debug { FileHandle.standardError.write(Data("[mac-i3] forward key \(event.getIntegerValueField(.keyboardEventKeycode)) -> pid \(pid)\n".utf8)) }
         return nil
     }
     guard type == .keyDown || type == .keyUp else { return type == .flagsChanged ? deliver() : Unmanaged.passUnretained(event) }
