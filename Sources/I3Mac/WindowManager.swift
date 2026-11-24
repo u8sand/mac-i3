@@ -60,6 +60,8 @@ public final class WindowManager {
     var lastCoveredCheckRaise = Date.distantPast
     /// When the user last ran a command (key binding or `mac-i3 msg`).
     var lastCommandAt = Date.distantPast
+    /// When a window was last seen closed.
+    var lastCloseAt = Date.distantPast
     var reconcilePending = false
     /// Set when a rule moved a new window away from the focus, so OS focus must be restored, not adopted.
     var reclaimFocus = false
@@ -870,6 +872,7 @@ public final class WindowManager {
             missingSince[id] = nil
             ownerMissingSince[id] = nil
             tree.removeWindow(id)
+            lastCloseAt = Date()
             wins[id] = nil; applied[id] = nil; retries[id] = nil; parked.remove(id); nativeFullscreen.remove(id)
             changed = true
         }
@@ -956,6 +959,16 @@ public final class WindowManager {
         defer { lastOSFocus = os }
         guard let os, os != lastOSFocus else { return false }
         guard tree.find(os) != nil else { return false }
+        // Closing a window makes macOS hand the focus to some other window: the app's next one, or the next app's,
+        // often parked on another workspace. That is not the user choosing it, so stay on the workspace in focus (as
+        // i3 does, even when it is now empty) and put our own focus back instead.
+        let closing = Date().timeIntervalSince(lastCloseAt) < 1.5
+            || (tree.focusedWindowID.flatMap { wins[$0] }.map { !AX.exists($0.element) } ?? false)
+        if closing, let osWs = tree.find(os)?.workspace, osWs !== tree.activeWorkspace {
+            log("a window closed: not following the focus to \(os) on workspace \(osWs.name)")
+            lastAppliedFocus = nil
+            return true
+        }
         lastAppliedFocus = os
         floatRaisePending = true
         if tree.focusedWindowID == os { return false }
